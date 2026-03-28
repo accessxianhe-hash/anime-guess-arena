@@ -1,0 +1,43 @@
+{
+  "name": "anime-guess-arena",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "postinstall": "prisma generate",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "seed": "npm run seed:dev",
+    "seed:dev": "tsx prisma/seed-dev.ts",
+    "seed:prod-admin": "tsx prisma/seed-prod-admin.ts",
+    "vercel-build": "prisma generate && prisma migrate deploy && next build"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.779.0",
+    "@prisma/client": "^6.5.0",
+    "bcryptjs": "^3.0.2",
+    "csv-parse": "^5.6.0",
+    "jszip": "^3.10.1",
+    "next": "^15.3.0",
+    "next-auth": "^5.0.0-beta.25",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.14",
+    "@types/react": "^19.0.12",
+    "@types/react-dom": "^19.0.4",
+    "eslint": "^9.23.0",
+    "eslint-config-next": "^15.3.0",
+    "prisma": "^6.5.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vitest": "^3.1.1"
+  }
+}

@@ -1,0 +1,9 @@
+<svg width="1280" height="720" viewBox="0 0 1280 720" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1280" height="720" fill="#101A3B"/>
+  <rect y="410" width="1280" height="310" fill="#241B43"/>
+  <circle cx="992" cy="148" r="82" fill="#FFB448"/>
+  <path d="M231 511C308 394 421 319 562 319C698 319 788 411 845 511H231Z" fill="#0A112C"/>
+  <path d="M630 207L688 247L646 308L720 308L603 400L548 396L600 323L540 323L630 207Z" fill="#5FD7FF"/>
+  <text x="76" y="118" fill="#EEF4FF" font-family="Bahnschrift, Arial" font-size="42" letter-spacing="3">DEMO SCREENSHOT</text>
+</svg>
+
