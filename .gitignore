@@ -12,6 +12,7 @@ dist
 prisma/dev.db
 prisma/dev.db-journal
 public/uploads
+data/postgresql/
 tools/
 Git/
 Microsoft VS Code/
