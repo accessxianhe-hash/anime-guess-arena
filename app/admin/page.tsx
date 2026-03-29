@@ -78,6 +78,13 @@ export default async function AdminDashboardPage() {
           <Link className="button-secondary" href="/admin/import">
             打开批量导入
           </Link>
+          <a className="button-ghost" href="/api/health" target="_blank" rel="noreferrer">
+            打开健康检查 JSON
+          </a>
+          <div className="message">
+            生产部署前建议运行 <code>npm run deploy:check</code>，上线后再访问
+            <code>/api/health</code> 复核数据库、认证地址和对象存储状态。
+          </div>
         </section>
 
         <section className="panel stack">

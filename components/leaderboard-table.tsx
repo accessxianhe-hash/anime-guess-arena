@@ -47,7 +47,9 @@ export function LeaderboardTable({
             <tbody>
               {entries.map((entry, index) => (
                 <tr key={entry.id}>
-                  <td>#{index + 1}</td>
+                  <td>
+                    <span className={`rank-badge rank-${Math.min(index + 1, 4)}`}>#{index + 1}</span>
+                  </td>
                   <td>{entry.nickname}</td>
                   <td>{entry.score}</td>
                   <td>
@@ -64,4 +66,3 @@ export function LeaderboardTable({
     </section>
   );
 }
-

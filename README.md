@@ -74,8 +74,10 @@
    - `prisma generate`
    - `prisma migrate deploy`
    - `next build`
-6. 首次正式上线后，手动执行 `npm run seed:prod-admin` 初始化管理员账号。
-7. 使用管理员登录后台，验证录题、导入、排行榜和图片上传是否正常。
+6. 部署前先运行 `npm run deploy:check`，确认当前环境的数据库、认证地址和对象存储配置都已就绪。
+7. 部署完成后访问 `/api/health`，确认线上环境返回 `200` 且 `ok=true`。
+8. 首次正式上线后，手动执行 `npm run seed:prod-admin` 初始化管理员账号。
+9. 使用管理员登录后台，验证录题、导入、排行榜和图片上传是否正常。
 
 完整步骤见 [DEPLOYMENT.md](./DEPLOYMENT.md)。
 

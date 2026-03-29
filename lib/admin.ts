@@ -40,6 +40,11 @@ export async function getQuestionsForAdmin() {
       aliases: {
         orderBy: { createdAt: "asc" },
       },
+      _count: {
+        select: {
+          attempts: true,
+        },
+      },
     },
     orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
   });

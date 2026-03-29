@@ -1,26 +1,30 @@
-# Vercel 部署清单
+# Deployment Guide
 
-这份清单对应当前项目的生产化配置，目标是让 `Preview` 和 `Production` 都能稳定运行，同时避免测试环境污染正式数据。
+This project is already structured for a Vercel-style deployment with PostgreSQL, Auth.js, and S3-compatible object storage.
 
-## 1. 准备数据库
+## 1. Recommended Target
 
-- 在 Vercel Marketplace 中接入 Prisma Postgres，或使用等价方式创建两套数据库。
-- 为 `Production` 单独准备一套库。
-- 为 `Preview` 单独准备一套库。
-- 把两套库分别绑定到对应的 Vercel 环境。
+- Hosting: Vercel
+- Database: PostgreSQL compatible with Prisma
+- Storage: S3-compatible object storage
+- Auth callback base URL: `NEXTAUTH_URL`
 
-## 2. 准备对象存储
+## 2. Environment Separation
 
-- 使用 S3 兼容对象存储。
-- 最少做到“同一存储服务，不同前缀”：
-  - 生产：`S3_KEY_PREFIX=prod/`
-  - 预览：`S3_KEY_PREFIX=preview/`
-- 如果条件允许，也可以让生产和预览使用不同 bucket。
-- 需要提供稳定的公开访问地址 `S3_PUBLIC_BASE_URL`。
+Use separate resources for `Preview` and `Production` whenever possible.
 
-## 3. Vercel 环境变量
+- Database:
+  - Production uses its own database
+  - Preview uses its own database
+- Object storage:
+  - Prefer different buckets, or
+  - Use different prefixes such as `prod/` and `preview/`
 
-所有环境都需要：
+This prevents preview uploads or migrations from polluting production data.
+
+## 3. Required Environment Variables
+
+Required in hosted environments:
 
 - `DATABASE_URL`
 - `NEXTAUTH_SECRET`
@@ -33,72 +37,123 @@
 - `S3_BUCKET`
 - `S3_ACCESS_KEY_ID`
 - `S3_SECRET_ACCESS_KEY`
-- `S3_PUBLIC_BASE_URL`
 - `S3_KEY_PREFIX`
 
-额外说明：
+At least one of the following should be available for image URLs:
 
-- `Production` 环境建议显式设置 `NEXTAUTH_URL=https://你的正式域名`
-- `Preview` 环境可以显式设置 `NEXTAUTH_URL`，也可以依赖 Vercel 提供的 `VERCEL_URL`
-- 如果你使用自定义 S3 兼容服务，需要配置 `S3_ENDPOINT`
+- `S3_PUBLIC_BASE_URL`
+- `S3_ENDPOINT`
 
-## 4. 构建与迁移
+Auth URL guidance:
 
-项目已经配置 `vercel.json` 和 `npm run vercel-build`。
+- Production:
+  - set `NEXTAUTH_URL=https://your-domain`
+- Preview:
+  - either set `NEXTAUTH_URL`
+  - or rely on `VERCEL_URL`
 
-部署时会自动执行：
+## 4. Preflight Before Deploy
+
+Run the deployment preflight locally or in CI:
+
+```bash
+npm run deploy:check
+```
+
+What it checks:
+
+- deployment stage detection
+- app URL presence
+- storage readiness
+- database connectivity
+
+If any item fails, the command exits with a non-zero status.
+
+## 5. Build And Migration Flow
+
+The repository already includes:
+
+- `vercel.json`
+- `npm run vercel-build`
+
+Vercel build flow:
 
 1. `prisma generate`
 2. `prisma migrate deploy`
 3. `next build`
 
-这意味着：
+Important notes:
 
-- Preview 部署只会改 Preview 数据库
-- Production 部署只会改 Production 数据库
-- migration 文件必须提交到仓库
+- commit Prisma migration files to the repository
+- keep preview and production databases separated
+- do not use `STORAGE_PROVIDER=local` in hosted environments
 
-## 5. 首次上线后的初始化
+## 6. Post-Deploy Checks
 
-首次正式部署完成后，手动执行：
+After a successful deployment:
+
+1. Open `/api/health`
+2. Confirm the response is `200`
+3. Confirm the JSON contains `ok: true`
+4. Log into `/admin/login`
+5. Verify question management and import pages load correctly
+6. Upload or import at least one image-backed question
+7. Start a play session and submit one leaderboard score
+
+## 7. First Production Seed
+
+Run this once after the first production deployment:
 
 ```bash
 npm run seed:prod-admin
 ```
 
-这个脚本只会创建或更新管理员账号，不会导入演示题目。
+This script only creates or updates the admin account. It does not insert demo questions.
 
-本地开发时使用：
+For local development, continue using:
 
 ```bash
 npm run seed:dev
 ```
 
-## 6. 上线后验证
+## 8. Common Problems
 
-至少验证以下项目：
+### Health check returns storage errors
 
-- 管理员可以成功登录后台
-- 手动录题可以上传图片并保存
-- ZIP 批量导入可以成功写入对象存储
-- 前台游客可以正常开始答题
-- 结算后可以提交排行榜
-- 重新部署后，旧图片仍然可访问
+Cause:
 
-## 7. 常见问题
+- `STORAGE_PROVIDER` is still `local`
+- or required S3 variables are missing
 
-### 后台上传时报错“不能使用本地存储”
+Fix:
 
-说明当前运行环境被识别为 Preview 或 Production，但 `STORAGE_PROVIDER` 仍是 `local`。把它改为 `s3` 并补齐对象存储变量。
+- switch to `STORAGE_PROVIDER=s3`
+- fill in the missing storage variables
 
-### 登录或后台页面直接报配置错误
+### Login fails in preview or production
 
-通常是以下变量缺失之一：
+Usually one of these is missing:
 
-- `DATABASE_URL`
 - `NEXTAUTH_SECRET`
-- `NEXTAUTH_URL` 或 Vercel 自动提供的 `VERCEL_URL`
+- `NEXTAUTH_URL`
+- `DATABASE_URL`
 
-### Preview 上传覆盖了正式图片
+### Images upload but cannot be opened
 
-说明 `Preview` 和 `Production` 共用了同一个对象存储前缀。请把 `S3_KEY_PREFIX` 分开。
+Usually image URL generation is incomplete.
+
+Check:
+
+- `S3_PUBLIC_BASE_URL`
+- or `S3_ENDPOINT`
+
+### Preview uploads overwrite production images
+
+Cause:
+
+- preview and production share the same storage path
+
+Fix:
+
+- use different buckets
+- or separate `S3_KEY_PREFIX`, such as `preview/` and `prod/`

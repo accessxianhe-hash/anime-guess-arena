@@ -13,8 +13,22 @@ export default async function AdminQuestionsPage() {
     redirect("/admin/login");
   }
 
-  const questions = await getQuestionsForAdmin();
+  const questionRecords = await getQuestionsForAdmin();
   const storage = getStorageConfigStatus();
+  const questions = questionRecords.map((question) => ({
+    id: question.id,
+    canonicalTitle: question.canonicalTitle,
+    imageUrl: question.imageUrl,
+    difficulty: question.difficulty,
+    tags: question.tags,
+    active: question.active,
+    updatedAt: question.updatedAt.toISOString(),
+    attemptCount: question._count.attempts,
+    aliases: question.aliases.map((item) => ({
+      id: item.id,
+      alias: item.alias,
+    })),
+  }));
 
   return (
     <div className="stack" style={{ gap: 24 }}>
