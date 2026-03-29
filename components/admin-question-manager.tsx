@@ -125,6 +125,38 @@ export function AdminQuestionManager({
     router.refresh();
   }
 
+  function handleDelete(question: AdminQuestion) {
+    setError(null);
+    setMessage(null);
+
+    const confirmed = window.confirm(
+      `确认删除《${question.canonicalTitle}》吗？如果它已经被对局使用，系统会阻止删除。`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    startTransition(async () => {
+      const response = await fetch(`/api/admin/questions/${question.id}`, {
+        method: "DELETE",
+      });
+
+      const payload = await response.json();
+      if (!response.ok) {
+        setError(payload.error ?? "删除题目失败。");
+        return;
+      }
+
+      if (form.id === question.id) {
+        resetForm();
+      }
+
+      setMessage("题目已删除。");
+      router.refresh();
+    });
+  }
+
   return (
     <div className="admin-grid">
       <section className="panel stack">
@@ -281,6 +313,14 @@ export function AdminQuestionManager({
                   >
                     {question.active ? "下架题目" : "重新上架"}
                   </button>
+                  <button
+                    type="button"
+                    className="button-danger"
+                    onClick={() => handleDelete(question)}
+                    disabled={isPending}
+                  >
+                    删除题目
+                  </button>
                 </div>
               </article>
             ))}
@@ -290,4 +330,3 @@ export function AdminQuestionManager({
     </div>
   );
 }
-

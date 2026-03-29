@@ -5,7 +5,7 @@ import { auth } from "@/auth";
 import { parseCsv } from "@/lib/csv";
 import { normalizeAnswer, normalizeTag } from "@/lib/answers";
 import { prisma } from "@/lib/prisma";
-import { uploadQuestionImage } from "@/lib/storage";
+import { deleteQuestionImage, uploadQuestionImage } from "@/lib/storage";
 import { importRowSchema, questionFormSchema } from "@/lib/validators";
 
 export async function requireAdminSession() {
@@ -220,6 +220,39 @@ export async function saveQuestion(
   });
 }
 
+export async function deleteQuestion(questionId: string) {
+  const existing = await prisma.question.findUnique({
+    where: { id: questionId },
+    select: {
+      id: true,
+      imageStorageKey: true,
+      _count: {
+        select: {
+          attempts: true,
+        },
+      },
+    },
+  });
+
+  if (!existing) {
+    throw new Error("要删除的题目不存在。");
+  }
+
+  if (existing._count.attempts > 0) {
+    throw new Error("该题目已经被对局使用，不能直接删除。请先下架。");
+  }
+
+  await prisma.question.delete({
+    where: { id: questionId },
+  });
+
+  try {
+    await deleteQuestionImage(existing.imageStorageKey);
+  } catch (error) {
+    console.error("Failed to delete question image", error);
+  }
+}
+
 type ImportResult = {
   imported: number;
   errors: Array<{
@@ -372,4 +405,3 @@ export async function importQuestionsFromArchive(file: File): Promise<ImportResu
     errors,
   };
 }
-

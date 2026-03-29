@@ -14,6 +14,24 @@
 
 ## 本地启动
 
+### 推荐方式：一键启动
+
+项目根目录已经提供了一键本地启动脚本：
+
+- Windows 双击 `start-local.cmd`
+- 或在 PowerShell 里运行 `.\scripts\start-local.ps1`
+
+脚本会自动完成以下步骤：
+
+1. 读取 `.env` 中的数据库和管理员配置
+2. 初始化并启动仓库内 PostgreSQL
+3. 创建本地数据库 `anime_guess`
+4. 执行 Prisma migration
+5. 注入管理员账号和 3 条演示题目
+6. 启动或复用 `http://localhost:3000` 上的 Next.js 开发服务
+
+### 手动方式
+
 1. 安装 Node.js 20+ 和 npm。
 2. 复制 `.env.example` 为 `.env` 并填入数据库和后台账号配置。
 3. 安装依赖：`npm install`
@@ -21,6 +39,13 @@
 5. 执行数据库迁移：`npm run prisma:migrate`
 6. 初始化管理员和演示题目：`npm run seed:dev`
 7. 启动开发环境：`npm run dev`
+
+### 本地联调注意事项
+
+- 使用仓库自带 PostgreSQL 时，`data/postgresql/17/pgpass.txt` 必须使用 `host:port:database:user:password` 格式，不能只写纯密码。
+- 调用 `psql`、`createdb` 等 PostgreSQL 客户端时，建议同时设置 `PGPASSFILE` 并带上 `-w`，否则命令可能退回交互式密码输入，看起来像“卡住不继续”。
+- 本地建议将 `TEMP`、`TMP` 指向仓库内 `tmp/`，避免 `tsx` / `esbuild` 在系统临时目录下触发权限问题。
+- 更完整的本地启动说明见 [LOCAL_SETUP_NOTES.md](./LOCAL_SETUP_NOTES.md)。
 
 ## Vercel 生产部署
 

@@ -1,5 +1,5 @@
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { mkdir, writeFile } from "node:fs/promises";
+import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -78,4 +78,26 @@ export async function uploadQuestionImage(
     storageKey,
     publicUrl: `/uploads/${storageKey}`,
   };
+}
+
+export async function deleteQuestionImage(storageKey: string | null | undefined) {
+  if (!storageKey) {
+    return;
+  }
+
+  const storageProvider = getStorageProvider();
+
+  if (storageProvider === "s3") {
+    const client = getS3Client();
+    await client.send(
+      new DeleteObjectCommand({
+        Bucket: process.env.S3_BUCKET!,
+        Key: storageKey,
+      }),
+    );
+    return;
+  }
+
+  const target = path.join(process.cwd(), "public", "uploads", storageKey);
+  await rm(target, { force: true });
 }
