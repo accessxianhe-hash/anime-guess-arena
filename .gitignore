@@ -9,6 +9,7 @@ coverage
 .env.production.local
 dist
 *.log
+tmp/
 prisma/dev.db
 prisma/dev.db-journal
 public/uploads
