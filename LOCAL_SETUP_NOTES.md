@@ -1,5 +1,10 @@
 # 本地启动注意事项
 
+## 一键启动
+
+- 双击根目录的 `start-local.cmd`，或在 PowerShell 里运行 `.\scripts\start-local.ps1`
+- 脚本会自动处理 PostgreSQL、数据库创建、Prisma migration、seed 和 Next.js 开发服务
+
 ## 注意事项
 
 - 使用仓库自带 PostgreSQL 时，`data/postgresql/17/pgpass.txt` 不能只写纯密码。
