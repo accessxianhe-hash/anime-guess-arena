@@ -98,17 +98,21 @@ export function assertAuthRuntimeReady() {
   }
 
   const appUrl = getAppUrl();
+  const trustHost =
+    getOptionalEnv("AUTH_TRUST_HOST") === "true" || Boolean(getOptionalEnv("VERCEL"));
+
   if (!appUrl) {
-    throw new Error(
-      "缺少 NEXTAUTH_URL。生产或预览环境中请配置 NEXTAUTH_URL，或依赖 Vercel 提供的 VERCEL_URL。",
-    );
+    if (!trustHost && !isHostedRuntime()) {
+      throw new Error(
+        "缺少 NEXTAUTH_URL。生产或预览环境中请配置 NEXTAUTH_URL，或依赖 Vercel 提供的 VERCEL_URL。",
+      );
+    }
   }
 
   return {
     secret,
     appUrl,
-    trustHost:
-      getOptionalEnv("AUTH_TRUST_HOST") === "true" || Boolean(getOptionalEnv("VERCEL")),
+    trustHost,
   };
 }
 
@@ -242,4 +246,3 @@ export function getDeploymentReadiness(): DeploymentReadiness {
     issues,
   };
 }
-
