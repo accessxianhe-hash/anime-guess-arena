@@ -54,10 +54,22 @@ Auth URL guidance:
 
 ## 4. Preflight Before Deploy
 
+Prepare a private env file first:
+
+- copy `.env.production.example` to `.env.production.local`
+- or copy `.env.preview.example` to `.env.preview.local`
+- fill in the real hosted values
+
+Generate a fresh auth secret if needed:
+
+```bash
+npm run auth:secret
+```
+
 Run the deployment preflight locally or in CI:
 
 ```bash
-npm run deploy:check
+npm run deploy:check -- --env-file=.env.production.local --stage=production
 ```
 
 What it checks:
@@ -105,10 +117,10 @@ After a successful deployment:
 Run this once after the first production deployment:
 
 ```bash
-npm run seed:prod-admin
+npm run seed:prod-admin:file
 ```
 
-This script only creates or updates the admin account. It does not insert demo questions.
+This command reads `.env.production.local`, then creates or updates the admin account. It does not insert demo questions.
 
 For local development, continue using:
 

@@ -74,10 +74,12 @@
    - `prisma generate`
    - `prisma migrate deploy`
    - `next build`
-6. 部署前先运行 `npm run deploy:check`，确认当前环境的数据库、认证地址和对象存储配置都已就绪。
-7. 部署完成后访问 `/api/health`，确认线上环境返回 `200` 且 `ok=true`。
-8. 首次正式上线后，手动执行 `npm run seed:prod-admin` 初始化管理员账号。
-9. 使用管理员登录后台，验证录题、导入、排行榜和图片上传是否正常。
+6. 先复制 [`.env.production.example`](./.env.production.example) 或 [`.env.preview.example`](./.env.preview.example) 到本地私有 env 文件，并填入真实线上值。
+7. 可先运行 `npm run auth:secret` 生成一个新的 `NEXTAUTH_SECRET`。
+8. 用 `npm run deploy:check -- --env-file=.env.production.local --stage=production` 预检线上配置；预览环境则改成 `preview`。
+9. 部署完成后访问 `/api/health`，确认线上环境返回 `200` 且 `ok=true`。
+10. 首次正式上线后，用 `npm run seed:prod-admin:file` 初始化管理员账号；它会直接读取 `.env.production.local`。
+11. 使用管理员登录后台，验证录题、导入、排行榜和图片上传是否正常。
 
 完整步骤见 [DEPLOYMENT.md](./DEPLOYMENT.md)。
 

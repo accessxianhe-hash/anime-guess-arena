@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "test": "vitest run",
+    "auth:secret": "node scripts/generate-auth-secret.mjs",
     "deploy:check": "tsx scripts/check-deployment-env.ts",
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
@@ -16,6 +17,7 @@
     "seed": "npm run seed:dev",
     "seed:dev": "tsx prisma/seed-dev.ts",
     "seed:prod-admin": "tsx prisma/seed-prod-admin.ts",
+    "seed:prod-admin:file": "node scripts/run-tsx-with-env.mjs .env.production.local prisma/seed-prod-admin.ts",
     "vercel-build": "prisma generate && prisma migrate deploy && next build"
   },
   "dependencies": {
