@@ -102,7 +102,10 @@ export function PlayClient() {
       return;
     }
 
-    if (remainingMs > 0 || finishTriggeredRef.current) {
+    const isExpired =
+      new Date(session.expiresAt).getTime() <= Date.now() + serverOffsetMsRef.current;
+
+    if (!isExpired || finishTriggeredRef.current) {
       return;
     }
 
