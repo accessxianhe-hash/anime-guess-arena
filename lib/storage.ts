@@ -18,10 +18,21 @@ function sanitizeFilename(filename: string) {
 }
 
 function getS3Client() {
+  const endpoint = process.env.S3_ENDPOINT || undefined;
+  const forcePathStyleOverride = process.env.S3_FORCE_PATH_STYLE;
+  const forcePathStyle =
+    forcePathStyleOverride === "true"
+      ? true
+      : forcePathStyleOverride === "false"
+        ? false
+        : endpoint
+          ? !endpoint.includes(".myqcloud.com")
+          : false;
+
   return new S3Client({
     region: process.env.S3_REGION || "auto",
-    endpoint: process.env.S3_ENDPOINT || undefined,
-    forcePathStyle: Boolean(process.env.S3_ENDPOINT),
+    endpoint,
+    forcePathStyle,
     credentials:
       process.env.S3_ACCESS_KEY_ID && process.env.S3_SECRET_ACCESS_KEY
         ? {
