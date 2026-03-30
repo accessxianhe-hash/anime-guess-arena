@@ -22,7 +22,8 @@ export default async function AdminImportPage() {
           批量导入 ZIP 题包
         </h1>
         <p className="hero-copy">
-          适合一次性录入整批截图题目。系统会逐行校验 CSV，能导入的题目直接入库，出错的行会在结果里标出来。
+          适合一次性录入整批截图题目。系统会逐行校验 CSV，能导入的题目直接入库，
+          出错的行会在结果里标出来。
         </p>
         <div
           className={storage.isReady ? "message success" : "message error"}

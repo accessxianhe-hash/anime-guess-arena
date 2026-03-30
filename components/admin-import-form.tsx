@@ -24,7 +24,7 @@ export function AdminImportForm() {
     setResult(null);
 
     if (!archive) {
-      setError("请先选择包含 questions.csv 和图片的 ZIP 包。");
+      setError("请先选择包含 questions.csv 和图片文件的 ZIP 包。");
       return;
     }
 
@@ -32,19 +32,27 @@ export function AdminImportForm() {
     formData.append("archive", archive);
 
     startTransition(async () => {
-      const response = await fetch("/api/admin/import", {
-        method: "POST",
-        body: formData,
-      });
+      try {
+        const response = await fetch("/api/admin/import", {
+          method: "POST",
+          body: formData,
+        });
 
-      const payload = await response.json();
-      if (!response.ok) {
-        setError(payload.error ?? "导入失败，请稍后再试。");
-        return;
+        const payload = await response.json();
+        if (!response.ok) {
+          setError(payload.error ?? "导入失败，请稍后再试。");
+          return;
+        }
+
+        setResult(payload);
+        router.refresh();
+      } catch (requestError) {
+        setError(
+          requestError instanceof Error
+            ? requestError.message
+            : "导入请求失败，请稍后再试。",
+        );
       }
-
-      setResult(payload);
-      router.refresh();
     });
   }
 
@@ -53,7 +61,8 @@ export function AdminImportForm() {
       <span className="eyebrow">ZIP 批量导入</span>
       <h1 className="section-title">一口气导入整批截图题目</h1>
       <p className="muted">
-        ZIP 包内必须有 `questions.csv`，并保证 CSV 里的 `image_filename` 能在压缩包里找到同名图片。
+        ZIP 包内必须包含 <code>questions.csv</code>，并保证 CSV 里的{" "}
+        <code>image_filename</code> 能在压缩包里找到同名图片。
       </p>
       <form className="form-stack" onSubmit={handleSubmit}>
         <div className="field">
@@ -90,4 +99,3 @@ export function AdminImportForm() {
     </div>
   );
 }
-
