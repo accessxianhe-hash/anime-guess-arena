@@ -9,6 +9,7 @@ type SubmitScoreFormProps = {
   correctCount: number;
   answeredCount: number;
   accuracy: number;
+  onReplay: () => void;
 };
 
 export function SubmitScoreForm({
@@ -17,6 +18,7 @@ export function SubmitScoreForm({
   correctCount,
   answeredCount,
   accuracy,
+  onReplay,
 }: SubmitScoreFormProps) {
   const router = useRouter();
   const [nickname, setNickname] = useState("");
@@ -89,11 +91,7 @@ export function SubmitScoreForm({
           <button type="submit" className="button" disabled={isPending}>
             {isPending ? "提交中..." : "提交成绩"}
           </button>
-          <button
-            type="button"
-            className="button-ghost"
-            onClick={() => router.push("/play")}
-          >
+          <button type="button" className="button-ghost" onClick={onReplay}>
             再来一局
           </button>
         </div>
@@ -104,4 +102,3 @@ export function SubmitScoreForm({
     </section>
   );
 }
-

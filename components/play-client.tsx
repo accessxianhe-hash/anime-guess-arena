@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 
 import { SubmitScoreForm } from "@/components/submit-score-form";
 
@@ -14,6 +14,7 @@ type SessionSummary = {
   expiresAt: string;
   finishedAt: string | null;
   accuracy: number;
+  serverNow: string;
 };
 
 type CurrentQuestion = {
@@ -42,10 +43,20 @@ export function PlayClient() {
   const [feedback, setFeedback] = useState<FeedbackState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isBooting, setIsBooting] = useState(true);
+  const [roundKey, setRoundKey] = useState(0);
   const [isPending, startTransition] = useTransition();
   const finishTriggeredRef = useRef(false);
+  const serverOffsetMsRef = useRef(0);
 
-  const remainingMs = useCountdown(session?.expiresAt ?? null, session?.status ?? "ACTIVE");
+  const remainingMs = useCountdown(
+    session?.expiresAt ?? null,
+    session?.status ?? "ACTIVE",
+    serverOffsetMsRef.current,
+  );
+
+  const syncServerClock = useCallback((nextSession: SessionSummary) => {
+    serverOffsetMsRef.current = new Date(nextSession.serverNow).getTime() - Date.now();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -53,6 +64,12 @@ export function PlayClient() {
     async function start() {
       setIsBooting(true);
       setError(null);
+      setFeedback(null);
+      setAnswer("");
+      setQuestion(null);
+      setSession(null);
+      finishTriggeredRef.current = false;
+
       const response = await fetch("/api/game/start", {
         method: "POST",
       });
@@ -67,11 +84,9 @@ export function PlayClient() {
       }
 
       if (!cancelled) {
-        finishTriggeredRef.current = false;
+        syncServerClock(payload.session);
         setSession(payload.session);
         setQuestion(payload.question);
-        setFeedback(null);
-        setAnswer("");
         setIsBooting(false);
       }
     }
@@ -80,7 +95,7 @@ export function PlayClient() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [roundKey, syncServerClock]);
 
   useEffect(() => {
     if (!session || session.status !== "ACTIVE") {
@@ -102,13 +117,14 @@ export function PlayClient() {
       });
       const payload = await response.json();
       if (response.ok) {
+        syncServerClock(payload.session);
         setSession(payload.session);
         setQuestion(null);
       } else {
         setError(payload.error ?? "结束本局时出现问题。");
       }
     });
-  }, [remainingMs, session, startTransition]);
+  }, [remainingMs, session, startTransition, syncServerClock]);
 
   const summary = useMemo(() => {
     if (!session) {
@@ -151,6 +167,7 @@ export function PlayClient() {
         return;
       }
 
+      syncServerClock(payload.session);
       setSession(payload.session);
       setFeedback(payload.result);
       setAnswer("");
@@ -208,6 +225,7 @@ export function PlayClient() {
           correctCount={summary.correctCount}
           answeredCount={summary.answeredCount}
           accuracy={summary.accuracy}
+          onReplay={() => setRoundKey((value) => value + 1)}
         />
       </div>
     );
@@ -232,9 +250,7 @@ export function PlayClient() {
               <img src={question.imageUrl} alt="动漫截图题目" />
             </div>
             <div className="label-row">
-              <span className="pill">
-                难度：{difficultyText[question.difficulty]}
-              </span>
+              <span className="pill">难度：{difficultyText[question.difficulty]}</span>
               {question.tags.map((tag) => (
                 <span key={tag} className="tag">
                   {tag}
@@ -251,7 +267,9 @@ export function PlayClient() {
             <strong>{feedback.isCorrect ? "回答正确" : "回答错误"}</strong>
             <p className="muted">
               正确答案：{feedback.acceptedAnswer}
-              {feedback.isCorrect ? `，本题 +${feedback.scoreAwarded} 分。` : "，继续冲下一题。"}
+              {feedback.isCorrect
+                ? `，本题 +${feedback.scoreAwarded} 分。`
+                : "，继续冲下一题。"}
             </p>
           </div>
         ) : null}
@@ -303,15 +321,21 @@ export function PlayClient() {
           <span className="eyebrow">规则提示</span>
           <div className="feature-card">
             <h3>判题方式</h3>
-            <p className="muted">支持标准名和后台录入别名，空格和大小写差异会自动规整。</p>
+            <p className="muted">
+              支持标准名和后台录入别名，空格和大小写差异会自动规整。
+            </p>
           </div>
           <div className="feature-card">
             <h3>计分规则</h3>
-            <p className="muted">简单题 10 分，普通题 20 分，困难题 30 分，不设连击加成。</p>
+            <p className="muted">
+              简单题 10 分，普通题 20 分，困难题 30 分，不设连击加成。
+            </p>
           </div>
           <div className="feature-card">
             <h3>上榜方式</h3>
-            <p className="muted">时间结束后填写昵称提交成绩，今日榜只保留同昵称当天最佳成绩。</p>
+            <p className="muted">
+              时间结束后填写昵称提交成绩，今日榜只保留同昵称当天最佳成绩。
+            </p>
           </div>
         </section>
       </aside>
@@ -319,7 +343,11 @@ export function PlayClient() {
   );
 }
 
-function useCountdown(expiresAt: string | null, status: SessionSummary["status"]) {
+function useCountdown(
+  expiresAt: string | null,
+  status: SessionSummary["status"],
+  serverOffsetMs: number,
+) {
   const [remainingMs, setRemainingMs] = useState(0);
 
   useEffect(() => {
@@ -329,7 +357,10 @@ function useCountdown(expiresAt: string | null, status: SessionSummary["status"]
     }
 
     const update = () => {
-      const next = Math.max(0, new Date(expiresAt).getTime() - Date.now());
+      const next = Math.max(
+        0,
+        new Date(expiresAt).getTime() - (Date.now() + serverOffsetMs),
+      );
       setRemainingMs(next);
     };
 
@@ -343,8 +374,7 @@ function useCountdown(expiresAt: string | null, status: SessionSummary["status"]
     return () => {
       window.clearInterval(timer);
     };
-  }, [expiresAt, status]);
+  }, [expiresAt, status, serverOffsetMs]);
 
   return remainingMs;
 }
-

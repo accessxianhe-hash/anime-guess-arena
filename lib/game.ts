@@ -33,6 +33,7 @@ type SessionSummary = {
   expiresAt: string;
   finishedAt: string | null;
   accuracy: number;
+  serverNow: string;
 };
 
 type AnswerResult = {
@@ -72,6 +73,7 @@ function buildSummary(
     expiresAt: session.expiresAt.toISOString(),
     finishedAt: session.finishedAt?.toISOString() ?? null,
     accuracy: calculateAccuracy(session.correctCount, session.answeredCount),
+    serverNow: new Date().toISOString(),
   };
 }
 
