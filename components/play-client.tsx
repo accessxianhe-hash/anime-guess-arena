@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 
 import { SubmitScoreForm } from "@/components/submit-score-form";
 
@@ -46,17 +46,11 @@ export function PlayClient() {
   const [roundKey, setRoundKey] = useState(0);
   const [isPending, startTransition] = useTransition();
   const finishTriggeredRef = useRef(false);
-  const serverOffsetMsRef = useRef(0);
-
   const remainingMs = useCountdown(
     session?.expiresAt ?? null,
+    session?.serverNow ?? null,
     session?.status ?? "ACTIVE",
-    serverOffsetMsRef.current,
   );
-
-  const syncServerClock = useCallback((nextSession: SessionSummary) => {
-    serverOffsetMsRef.current = new Date(nextSession.serverNow).getTime() - Date.now();
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -84,7 +78,6 @@ export function PlayClient() {
       }
 
       if (!cancelled) {
-        syncServerClock(payload.session);
         setSession(payload.session);
         setQuestion(payload.question);
         setIsBooting(false);
@@ -95,17 +88,14 @@ export function PlayClient() {
     return () => {
       cancelled = true;
     };
-  }, [roundKey, syncServerClock]);
+  }, [roundKey]);
 
   useEffect(() => {
     if (!session || session.status !== "ACTIVE") {
       return;
     }
 
-    const isExpired =
-      new Date(session.expiresAt).getTime() <= Date.now() + serverOffsetMsRef.current;
-
-    if (!isExpired || finishTriggeredRef.current) {
+    if (remainingMs === null || remainingMs > 0 || finishTriggeredRef.current) {
       return;
     }
 
@@ -120,14 +110,13 @@ export function PlayClient() {
       });
       const payload = await response.json();
       if (response.ok) {
-        syncServerClock(payload.session);
         setSession(payload.session);
         setQuestion(null);
       } else {
         setError(payload.error ?? "结束本局时出现问题。");
       }
     });
-  }, [remainingMs, session, startTransition, syncServerClock]);
+  }, [remainingMs, session, startTransition]);
 
   const summary = useMemo(() => {
     if (!session) {
@@ -170,7 +159,6 @@ export function PlayClient() {
         return;
       }
 
-      syncServerClock(payload.session);
       setSession(payload.session);
       setFeedback(payload.result);
       setAnswer("");
@@ -244,7 +232,7 @@ export function PlayClient() {
               看图输入作品名，答对就加分。
             </h1>
           </div>
-          <div className="countdown">剩余 {Math.ceil(remainingMs / 1000)} 秒</div>
+          <div className="countdown">剩余 {Math.ceil((remainingMs ?? 0) / 1000)} 秒</div>
         </div>
 
         {question ? (
@@ -348,22 +336,26 @@ export function PlayClient() {
 
 function useCountdown(
   expiresAt: string | null,
+  serverNow: string | null,
   status: SessionSummary["status"],
-  serverOffsetMs: number,
 ) {
-  const [remainingMs, setRemainingMs] = useState(0);
+  const [remainingMs, setRemainingMs] = useState<number | null>(null);
 
   useEffect(() => {
-    if (!expiresAt) {
-      setRemainingMs(0);
+    if (!expiresAt || !serverNow) {
+      setRemainingMs(null);
       return;
     }
 
+    const initialRemaining = Math.max(
+      0,
+      new Date(expiresAt).getTime() - new Date(serverNow).getTime(),
+    );
+    const localStart = performance.now();
+
     const update = () => {
-      const next = Math.max(
-        0,
-        new Date(expiresAt).getTime() - (Date.now() + serverOffsetMs),
-      );
+      const elapsed = performance.now() - localStart;
+      const next = Math.max(0, initialRemaining - elapsed);
       setRemainingMs(next);
     };
 
@@ -377,7 +369,7 @@ function useCountdown(
     return () => {
       window.clearInterval(timer);
     };
-  }, [expiresAt, status, serverOffsetMs]);
+  }, [expiresAt, serverNow, status]);
 
   return remainingMs;
 }
