@@ -30,6 +30,9 @@ type FeedbackState = {
   scoreAwarded: number;
 };
 
+const MIN_FEEDBACK_MS = 280;
+const NEXT_IMAGE_PRELOAD_TIMEOUT_MS = 900;
+
 const difficultyText = {
   EASY: "简单",
   MEDIUM: "普通",
@@ -46,11 +49,25 @@ export function PlayClient() {
   const [roundKey, setRoundKey] = useState(0);
   const [isPending, startTransition] = useTransition();
   const finishTriggeredRef = useRef(false);
+  const advanceTimerRef = useRef<number | null>(null);
+  const preloadTimeoutRef = useRef<number | null>(null);
   const remainingMs = useCountdown(
     session?.expiresAt ?? null,
     session?.serverNow ?? null,
     session?.status ?? "ACTIVE",
   );
+
+  useEffect(() => {
+    return () => {
+      if (advanceTimerRef.current !== null) {
+        window.clearTimeout(advanceTimerRef.current);
+      }
+
+      if (preloadTimeoutRef.current !== null) {
+        window.clearTimeout(preloadTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -131,6 +148,54 @@ export function PlayClient() {
     };
   }, [session]);
 
+  function queueNextQuestion(nextQuestion: CurrentQuestion) {
+    if (advanceTimerRef.current !== null) {
+      window.clearTimeout(advanceTimerRef.current);
+      advanceTimerRef.current = null;
+    }
+
+    if (preloadTimeoutRef.current !== null) {
+      window.clearTimeout(preloadTimeoutRef.current);
+      preloadTimeoutRef.current = null;
+    }
+
+    if (!nextQuestion) {
+      advanceTimerRef.current = window.setTimeout(() => {
+        setFeedback(null);
+        setQuestion(null);
+      }, MIN_FEEDBACK_MS);
+      return;
+    }
+
+    const preloadStartedAt = performance.now();
+    let revealed = false;
+
+    const revealNextQuestion = () => {
+      if (revealed) {
+        return;
+      }
+
+      revealed = true;
+      const elapsed = performance.now() - preloadStartedAt;
+      const remainingDelay = Math.max(0, MIN_FEEDBACK_MS - elapsed);
+
+      advanceTimerRef.current = window.setTimeout(() => {
+        setFeedback(null);
+        setQuestion(nextQuestion);
+      }, remainingDelay);
+    };
+
+    const image = new window.Image();
+    image.onload = revealNextQuestion;
+    image.onerror = revealNextQuestion;
+    image.src = nextQuestion.imageUrl;
+
+    preloadTimeoutRef.current = window.setTimeout(
+      revealNextQuestion,
+      NEXT_IMAGE_PRELOAD_TIMEOUT_MS,
+    );
+  }
+
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -162,15 +227,9 @@ export function PlayClient() {
       setSession(payload.session);
       setFeedback(payload.result);
       setAnswer("");
-
-      window.setTimeout(() => {
-        setFeedback(null);
-        setQuestion(payload.nextQuestion);
-      }, 850);
-
-      if (!payload.nextQuestion || payload.session.status !== "ACTIVE") {
-        setQuestion(null);
-      }
+      queueNextQuestion(
+        payload.session.status === "ACTIVE" ? payload.nextQuestion : null,
+      );
     });
   }
 
@@ -238,7 +297,12 @@ export function PlayClient() {
         {question ? (
           <>
             <div className="play-image">
-              <img src={question.imageUrl} alt="动漫截图题目" />
+              <img
+                src={question.imageUrl}
+                alt="动漫截图题目"
+                loading="eager"
+                decoding="async"
+              />
             </div>
             <div className="label-row">
               <span className="pill">难度：{difficultyText[question.difficulty]}</span>
