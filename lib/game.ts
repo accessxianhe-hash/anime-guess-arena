@@ -2,7 +2,7 @@ import {
   Difficulty,
   GameSessionStatus,
   LeaderboardScope,
-  type Prisma,
+  Prisma,
 } from "@prisma/client";
 
 import { APP_TIMEZONE, GAME_DURATION_SECONDS } from "@/lib/constants";
@@ -81,22 +81,16 @@ async function getAvailableQuestion(
   tx: Prisma.TransactionClient,
   sessionId: string,
 ) {
-  const attempts = await tx.answerAttempt.findMany({
-    where: { sessionId },
-    select: { questionId: true },
-  });
-
-  const excludedIds = attempts.map((attempt) => attempt.questionId);
-
-  const candidates = await tx.question.findMany({
+  return tx.question.findFirst({
     where: {
       active: true,
-      id: {
-        notIn: excludedIds,
+      attempts: {
+        none: {
+          sessionId,
+        },
       },
     },
     orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
-    take: 50,
     select: {
       id: true,
       canonicalTitle: true,
@@ -105,26 +99,10 @@ async function getAvailableQuestion(
       tags: true,
     },
   });
-
-  if (candidates.length === 0) {
-    return null;
-  }
-
-  const index = Math.floor(Math.random() * candidates.length);
-  return candidates[index];
 }
 
 export async function startGameSession() {
   return prisma.$transaction(async (tx) => {
-    const firstQuestion = await tx.question.findFirst({
-      where: { active: true },
-      select: { id: true },
-    });
-
-    if (!firstQuestion) {
-      throw new Error("当前没有可用题目，请先在后台添加题目。");
-    }
-
     const expiresAt = new Date(Date.now() + GAME_DURATION_SECONDS * 1000);
     const session = await tx.gameSession.create({
       data: {
@@ -187,47 +165,16 @@ export async function submitAnswer(
       };
     }
 
-    const existingAttempt = await tx.answerAttempt.findUnique({
-      where: {
-        sessionId_questionId: {
-          sessionId,
-          questionId,
-        },
-      },
-      include: {
-        question: {
-          select: {
-            canonicalTitle: true,
-          },
-        },
-      },
-    });
-
-    if (existingAttempt) {
-      return {
-        session: buildSummary(session),
-        result: {
-          acceptedAnswer: existingAttempt.question.canonicalTitle,
-          isCorrect: existingAttempt.isCorrect,
-          scoreAwarded: existingAttempt.scoreAwarded,
-        },
-        nextQuestion: await getAvailableQuestion(tx, sessionId).then((next) =>
-          next ? mapQuestion(next) : null,
-        ),
-      };
-    }
-
-    const question = await tx.question.findFirst({
+    const question = await tx.question.findUnique({
       where: {
         id: questionId,
-        active: true,
       },
       include: {
         aliases: true,
       },
     });
 
-    if (!question) {
+    if (!question || !question.active) {
       throw new Error("题目不存在或已下架。");
     }
 
@@ -237,16 +184,57 @@ export async function submitAnswer(
       question.aliases.some((alias) => alias.normalizedAlias === normalizedSubmittedAnswer);
     const scoreAwarded = isCorrect ? calculateQuestionScore(question.difficulty) : 0;
 
-    await tx.answerAttempt.create({
-      data: {
-        sessionId,
-        questionId,
-        submittedAnswer: answer,
-        normalizedSubmittedAnswer,
-        isCorrect,
-        scoreAwarded,
-      },
-    });
+    try {
+      await tx.answerAttempt.create({
+        data: {
+          sessionId,
+          questionId,
+          submittedAnswer: answer,
+          normalizedSubmittedAnswer,
+          isCorrect,
+          scoreAwarded,
+        },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002"
+      ) {
+        const existingAttempt = await tx.answerAttempt.findUnique({
+          where: {
+            sessionId_questionId: {
+              sessionId,
+              questionId,
+            },
+          },
+          include: {
+            question: {
+              select: {
+                canonicalTitle: true,
+              },
+            },
+          },
+        });
+
+        if (!existingAttempt) {
+          throw error;
+        }
+
+        return {
+          session: buildSummary(session),
+          result: {
+            acceptedAnswer: existingAttempt.question.canonicalTitle,
+            isCorrect: existingAttempt.isCorrect,
+            scoreAwarded: existingAttempt.scoreAwarded,
+          },
+          nextQuestion: await getAvailableQuestion(tx, sessionId).then((next) =>
+            next ? mapQuestion(next) : null,
+          ),
+        };
+      }
+
+      throw error;
+    }
 
     const updatedSession = await tx.gameSession.update({
       where: { id: sessionId },
