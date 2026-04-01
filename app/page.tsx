@@ -18,161 +18,138 @@ export default async function HomePage() {
   const previewEntries = await getPreviewEntries();
 
   return (
-    <div className="stack" style={{ gap: 28 }}>
-      <section className="hero-grid hero-grid-landing">
-        <div className="hero-panel hero-panel-spotlight">
-          <span className="eyebrow">Anime Guess Arena</span>
-          <p className="hero-kicker">Speed quiz for screenshot hunters</p>
-          <h1 className="hero-title">看一眼截图，抢在倒计时前认出作品。</h1>
+    <div className="stack page-stack">
+      <section className="hero-banner">
+        <div className="hero-copy-block">
+          <span className="eyebrow">Anime Screenshot Guessing</span>
+          <p className="hero-kicker">Simple, fast, and built like an anime special site</p>
+          <h1 className="hero-title">看一眼截图，在 60 秒里把作品认出来。</h1>
           <p className="hero-copy">
-            番图冲刺把“识图”“输入”“判题”“冲榜”压缩进一局 60 秒里。页面一打开就能直接玩，
-            你只需要盯住截图、打出作品名，然后看分数和排名一路往上跳。
+            番图冲刺把玩法压缩到最核心的一条线里：看图、输入、判题、继续下一题。
+            页面不靠夸张动效堆气氛，而是用更干净的版式、更明确的反馈和更直接的
+            节奏，让你像在追官方宣传站一样进入状态。
           </p>
           <div className="cta-row">
             <Link href="/play" className="button">
-              立即开始挑战
+              开始挑战
             </Link>
-            <Link href="/leaderboard" className="button-secondary">
-              先看排行榜
+            <Link href="/leaderboard" className="button-ghost">
+              查看排行榜
             </Link>
-          </div>
-          <div className="stat-grid">
-            <div className="stat-card">
-              <span className="muted">节奏模式</span>
-              <strong>60 秒极速连答</strong>
-            </div>
-            <div className="stat-card">
-              <span className="muted">判题逻辑</span>
-              <strong>标准名与别名兼容</strong>
-            </div>
-            <div className="stat-card">
-              <span className="muted">上手门槛</span>
-              <strong>游客直接上榜</strong>
-            </div>
-          </div>
-          <div className="pill-row">
-            <span className="pill">前台无登录门槛</span>
-            <span className="pill">后台可手动录题</span>
-            <span className="pill">支持 ZIP 整包导入</span>
           </div>
         </div>
 
-        <div className="hero-stage panel stack">
-          <div className="split-header">
-            <div>
-              <span className="eyebrow">Live Arena Feed</span>
-              <h2 className="section-title">一眼就知道这个站点怎么玩。</h2>
-            </div>
-            <span className="signal-badge">实时竞技感</span>
+        <div className="hero-side-stack">
+          <div className="hero-note-card">
+            <span className="eyebrow eyebrow-soft">玩法节奏</span>
+            <ul className="bullet-list">
+              <li>开局即进题，不先做多余引导。</li>
+              <li>答对、答错、跳过都立刻给反馈。</li>
+              <li>一局不重复出题，结算后直接再来一局。</li>
+            </ul>
           </div>
 
-          <div className="signal-list">
-            <article className="signal-card">
-              <strong>识图即开答</strong>
-              <p className="muted">每次只展示一张截图，把注意力全部锁定在画面细节上。</p>
-            </article>
-            <article className="signal-card">
-              <strong>即时反馈</strong>
-              <p className="muted">输入提交后立刻知道对错，正确答案和分数变化同步反馈。</p>
-            </article>
-            <article className="signal-card">
-              <strong>复玩驱动</strong>
-              <p className="muted">结算后一步上榜，再来一局的心理成本足够低。</p>
-            </article>
-          </div>
-
-          <div className="ring-card">
-            <div className="ring-visual">
-              <span>60s</span>
+          <div className="poster-strip">
+            <div className="poster-swatch poster-swatch-haikyu">
+              <span>SPORTS</span>
             </div>
-            <div className="stack" style={{ gap: 8 }}>
-              <strong>竞速场骨架已经成型</strong>
-              <p className="muted" style={{ margin: 0 }}>
-                当前版本优先把核心循环打磨顺滑，后续可以继续叠加房间赛、主题赛季和玩家档案。
-              </p>
+            <div className="poster-swatch poster-swatch-jjk">
+              <span>CURSED</span>
             </div>
-          </div>
-
-          <div className="inline-list">
-            <span className="tag">截图识别</span>
-            <span className="tag">即时判题</span>
-            <span className="tag">冲榜反馈</span>
-            <span className="tag">后台运营</span>
+            <div className="poster-swatch poster-swatch-spy">
+              <span>FAMILY</span>
+            </div>
+            <div className="poster-swatch poster-swatch-csm">
+              <span>CHAOS</span>
+            </div>
           </div>
         </div>
       </section>
 
-      <section className="cards-grid cards-grid-balanced">
-        <article className="question-card stack">
-          <div className="spotlight-image">
-            <img src="/demo/ocean-dream.svg" alt="玩法示意图" />
-          </div>
-          <div>
-            <span className="eyebrow">站点气质</span>
-            <h2 className="section-title">轻竞技、强反馈、没有废动作的截图竞猜体验。</h2>
-            <p className="muted">
-              这个 MVP 不急着堆社交层，而是先把截图、输入、判题、加分、结算五步做得又快又准。每个界面都应该围绕“马上进入下一次判断”服务。
+      <section className="two-column feature-columns">
+        <div className="panel stack">
+          <div className="split-header split-header-top">
+            <div>
+              <span className="eyebrow">Why It Feels Better</span>
+              <h2 className="section-title">不是“AI 浮夸卡片”，而是更像官方专题页。</h2>
+            </div>
+            <p className="muted compact-copy">
+              视觉上借了运动番官网、电影 PV 页面和角色竞猜站的结构感，但刻意不堆
+              人物大图，把氛围留给题图本身。
             </p>
           </div>
-          <div className="pill-row">
-            <span className="pill">游客直接玩</span>
-            <span className="pill">后台可录题</span>
-            <span className="pill">支持批量导入</span>
+
+          <div className="story-grid story-grid-wide">
+            <article className="story-card">
+              <strong>更少装饰</strong>
+              <p className="muted">
+                用明确的分区、留白和线条组织页面，而不是大面积玻璃感和发光渐变。
+              </p>
+            </article>
+            <article className="story-card">
+              <strong>更强节奏</strong>
+              <p className="muted">
+                每个模块都围绕“继续答下一题”服务，强调输入反馈与对局推进。
+              </p>
+            </article>
+            <article className="story-card">
+              <strong>更轻的二次元气氛</strong>
+              <p className="muted">
+                用配色、分镜感标题和专题页式排版表达氛围，不靠滥用角色图。
+              </p>
+            </article>
+            <article className="story-card">
+              <strong>更适合持续运营</strong>
+              <p className="muted">
+                首页是入口，后台和导入才是长期运营工具，所以设计也保持干净耐看。
+              </p>
+            </article>
           </div>
-        </article>
-
-        <div className="stack" style={{ gap: 18 }}>
-          <section className="panel stack">
-            <span className="eyebrow">运营视角</span>
-            <div className="story-grid">
-              <article className="story-card">
-                <strong>题库维护</strong>
-                <p className="muted">可手动录题，也能用 ZIP + CSV 一次性导入整批截图。</p>
-              </article>
-              <article className="story-card">
-                <strong>本地联调</strong>
-                <p className="muted">仓库内已整理好本地 Node、PostgreSQL 和一键启动流程。</p>
-              </article>
-              <article className="story-card">
-                <strong>上线预备</strong>
-                <p className="muted">Auth、对象存储和部署预检链路已经开始收口。</p>
-              </article>
-            </div>
-          </section>
-
-          <LeaderboardTable
-            title="今日榜预览"
-            entries={previewEntries}
-            emptyLabel="今天还没人上榜，先来成为第一个挑战者。"
-          />
         </div>
+
+        <LeaderboardTable
+          title="今日榜预览"
+          entries={previewEntries}
+          emptyLabel="今天还没有成绩，去成为第一个上榜的人。"
+        />
       </section>
 
       <section className="panel stack">
-        <div className="split-header">
+        <div className="split-header split-header-top">
           <div>
-            <span className="eyebrow">Challenge Loop</span>
-            <h2 className="section-title">一局体验只有四步，但每一步都必须有反馈。</h2>
+            <span className="eyebrow">Play Loop</span>
+            <h2 className="section-title">进入、识别、提交、继续。整局体验只做四件事。</h2>
           </div>
-          <p className="muted">这也是后续做视觉强化和社交扩展的基础骨架。</p>
         </div>
 
-        <div className="story-grid story-grid-wide">
-          <article className="story-card">
-            <strong>01. 抽题开局</strong>
-            <p className="muted">进入页面即生成一局，不让用户先读规则再开始。</p>
+        <div className="number-grid">
+          <article className="number-card">
+            <span className="number-badge">01</span>
+            <strong>开局即抽题</strong>
+            <p className="muted">
+              进入页面就直接创建一局挑战，不让玩家先看一堆无关说明。
+            </p>
           </article>
-          <article className="story-card">
-            <strong>02. 单题聚焦</strong>
-            <p className="muted">每次只做一个判断，让截图本身成为舞台中心。</p>
+          <article className="number-card">
+            <span className="number-badge">02</span>
+            <strong>单题高聚焦</strong>
+            <p className="muted">
+              一次只看一张截图，把判断力集中在画面细节，而不是 UI 噪音。
+            </p>
           </article>
-          <article className="story-card">
-            <strong>03. 判题回弹</strong>
-            <p className="muted">答对或答错都要立刻给出明确反馈和下一步动作。</p>
+          <article className="number-card">
+            <span className="number-badge">03</span>
+            <strong>反馈很干脆</strong>
+            <p className="muted">
+              答案对错、得分和跳过结果都会立刻回弹，不让玩家悬着。
+            </p>
           </article>
-          <article className="story-card">
-            <strong>04. 结算冲榜</strong>
-            <p className="muted">结算页不只是收尾，它还应该推动玩家马上复玩。</p>
+          <article className="number-card">
+            <span className="number-badge">04</span>
+            <strong>结算继续推动复玩</strong>
+            <p className="muted">
+              结算页不只是收尾，它必须让“再来一局”这件事足够顺手。
+            </p>
           </article>
         </div>
       </section>

@@ -21,12 +21,12 @@ export function LeaderboardTable({
 }: LeaderboardTableProps) {
   return (
     <section className="table-card">
-      <div className="split-header">
+      <div className="split-header split-header-top">
         <div>
           <div className="eyebrow">{title}</div>
           <h2 className="section-title">高分冲刺榜</h2>
         </div>
-        <p className="muted">按分数优先、用时次优排序</p>
+        <p className="muted compact-copy">按分数优先，同分时按用时排序。</p>
       </div>
 
       {entries.length === 0 ? (

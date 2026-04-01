@@ -285,15 +285,12 @@ export function PlayClient() {
       <div className="stack" style={{ gap: 24 }}>
         <section className="panel">
           <span className="eyebrow">挑战结束</span>
-          <h1
-            className="hero-title"
-            style={{ fontSize: "clamp(2rem, 3vw, 3.4rem)" }}
-          >
+          <h1 className="hero-title hero-title-compact">
             本局已结束，看看你能不能冲上榜。
           </h1>
           <p className="hero-copy">
-            倒计时归零或题库抽完后会自动结算。你可以填写昵称提交成绩，
-            也可以直接再来一局。
+            倒计时归零或题库抽完后会自动结算。你可以填写昵称提交成绩，也可以直接
+            再来一局。
           </p>
         </section>
         <SubmitScoreForm
@@ -310,15 +307,12 @@ export function PlayClient() {
 
   return (
     <div className="play-layout">
-      <section className="panel stack">
-        <div className="split-header">
+      <section className="panel stack play-stage-panel">
+        <div className="split-header split-header-top">
           <div>
             <span className="eyebrow">进行中</span>
-            <h1
-              className="section-title"
-              style={{ fontSize: "clamp(1.9rem, 2.5vw, 3rem)" }}
-            >
-              看图输入作品名，答对就加分。
+            <h1 className="section-title play-stage-title">
+              看图、输入作品名、继续下一题。
             </h1>
           </div>
           <div className="countdown">
@@ -337,7 +331,7 @@ export function PlayClient() {
               />
             </div>
             <div className="label-row">
-              <span className="pill">难度：{difficultyText[question.difficulty]}</span>
+              <span className="pill">难度: {difficultyText[question.difficulty]}</span>
               {question.tags.map((tag) => (
                 <span key={tag} className="tag">
                   {tag}
@@ -359,7 +353,7 @@ export function PlayClient() {
                   : "回答错误"}
             </strong>
             <p className="muted">
-              正确答案：{feedback.acceptedAnswer}
+              正确答案: {feedback.acceptedAnswer}
               {feedback.skipped
                 ? "，已为你切到下一题。"
                 : feedback.isCorrect
@@ -377,7 +371,7 @@ export function PlayClient() {
             <input
               id="answer"
               autoComplete="off"
-              placeholder="例如：海贼王"
+              placeholder="例如: 海贼王"
               value={answer}
               onChange={(event) => setAnswer(event.target.value)}
               disabled={!question || isPending}
@@ -406,7 +400,7 @@ export function PlayClient() {
       <aside className="stack">
         <section className="panel stack">
           <span className="eyebrow">当前战绩</span>
-          <div className="stat-grid" style={{ marginTop: 0 }}>
+          <div className="stat-grid stat-grid-play" style={{ marginTop: 0 }}>
             <div className="score-card">
               <span className="muted">总分</span>
               <strong>{summary.score}</strong>

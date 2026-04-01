@@ -5,7 +5,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "番图冲刺",
-  description: "面向动漫爱好者的截图竞猜互动网站",
+  description: "面向动漫爱好者的截图竞猜网站",
 };
 
 export default function RootLayout({
@@ -33,4 +33,3 @@ export default function RootLayout({
     </html>
   );
 }
-

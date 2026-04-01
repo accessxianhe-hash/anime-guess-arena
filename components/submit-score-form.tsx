@@ -64,7 +64,7 @@ export function SubmitScoreForm({
           <strong>{score}</strong>
         </div>
         <div className="score-card">
-          <span className="muted">答对题数</span>
+          <span className="muted">答题数</span>
           <strong>
             {correctCount}/{answeredCount}
           </strong>
