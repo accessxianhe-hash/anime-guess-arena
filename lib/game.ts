@@ -301,7 +301,7 @@ async function resolveQuestionTurn(
       data: {
         score: { increment: scoreAwarded },
         correctCount: { increment: isCorrect ? 1 : 0 },
-        answeredCount: { increment: 1 },
+        answeredCount: { increment: skipped ? 0 : 1 },
       },
     });
 
