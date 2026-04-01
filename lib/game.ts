@@ -40,6 +40,18 @@ type AnswerResult = {
   acceptedAnswer: string;
   isCorrect: boolean;
   scoreAwarded: number;
+  skipped: boolean;
+};
+
+type GameSessionRecord = {
+  id: string;
+  status: GameSessionStatus;
+  score: number;
+  correctCount: number;
+  answeredCount: number;
+  startedAt: Date;
+  expiresAt: Date;
+  finishedAt: Date | null;
 };
 
 function mapQuestion(question: QuestionPayload) {
@@ -51,18 +63,7 @@ function mapQuestion(question: QuestionPayload) {
   };
 }
 
-function buildSummary(
-  session: {
-    id: string;
-    status: GameSessionStatus;
-    score: number;
-    correctCount: number;
-    answeredCount: number;
-    startedAt: Date;
-    expiresAt: Date;
-    finishedAt: Date | null;
-  },
-): SessionSummary {
+function buildSummary(session: GameSessionRecord): SessionSummary {
   return {
     sessionId: session.id,
     status: session.status,
@@ -75,6 +76,18 @@ function buildSummary(
     accuracy: calculateAccuracy(session.correctCount, session.answeredCount),
     serverNow: new Date().toISOString(),
   };
+}
+
+function wasSkippedAttempt(attempt: {
+  submittedAnswer: string;
+  isCorrect: boolean;
+  scoreAwarded: number;
+}) {
+  return (
+    attempt.submittedAnswer.trim().length === 0 &&
+    !attempt.isCorrect &&
+    attempt.scoreAwarded === 0
+  );
 }
 
 async function getAvailableQuestion(
@@ -101,25 +114,29 @@ async function getAvailableQuestion(
   });
 }
 
-export async function startGameSession() {
-  return prisma.$transaction(async (tx) => {
-    const expiresAt = new Date(Date.now() + GAME_DURATION_SECONDS * 1000);
-    const session = await tx.gameSession.create({
+async function finalizeSessionAfterTurn(
+  tx: Prisma.TransactionClient,
+  session: GameSessionRecord,
+  nextQuestion: QuestionPayload | null,
+) {
+  if (session.status !== GameSessionStatus.ACTIVE) {
+    return session;
+  }
+
+  const expired = Date.now() >= session.expiresAt.getTime();
+  if (!nextQuestion || expired) {
+    return tx.gameSession.update({
+      where: { id: session.id },
       data: {
-        expiresAt,
+        status: expired
+          ? GameSessionStatus.EXPIRED
+          : GameSessionStatus.COMPLETED,
+        finishedAt: new Date(),
       },
     });
+  }
 
-    const question = await getAvailableQuestion(tx, session.id);
-    if (!question) {
-      throw new Error("未能抽取题目，请稍后再试。");
-    }
-
-    return {
-      session: buildSummary(session),
-      question: mapQuestion(question),
-    };
-  });
+  return session;
 }
 
 async function expireSessionIfNeeded(
@@ -150,10 +167,32 @@ async function expireSessionIfNeeded(
   return session;
 }
 
-export async function submitAnswer(
+export async function startGameSession() {
+  return prisma.$transaction(async (tx) => {
+    const expiresAt = new Date(Date.now() + GAME_DURATION_SECONDS * 1000);
+    const session = await tx.gameSession.create({
+      data: {
+        expiresAt,
+      },
+    });
+
+    const question = await getAvailableQuestion(tx, session.id);
+    if (!question) {
+      throw new Error("未能抽取题目，请稍后再试。");
+    }
+
+    return {
+      session: buildSummary(session),
+      question: mapQuestion(question),
+    };
+  });
+}
+
+async function resolveQuestionTurn(
   sessionId: string,
   questionId: string,
-  answer: string,
+  submittedAnswer: string,
+  skipped: boolean,
 ) {
   return prisma.$transaction(async (tx) => {
     const session = await expireSessionIfNeeded(tx, sessionId);
@@ -178,10 +217,15 @@ export async function submitAnswer(
       throw new Error("题目不存在或已下架。");
     }
 
-    const normalizedSubmittedAnswer = normalizeAnswer(answer);
+    const normalizedSubmittedAnswer = skipped
+      ? ""
+      : normalizeAnswer(submittedAnswer);
     const isCorrect =
-      normalizedSubmittedAnswer === question.normalizedCanonicalTitle ||
-      question.aliases.some((alias) => alias.normalizedAlias === normalizedSubmittedAnswer);
+      !skipped &&
+      (normalizedSubmittedAnswer === question.normalizedCanonicalTitle ||
+        question.aliases.some(
+          (alias) => alias.normalizedAlias === normalizedSubmittedAnswer,
+        ));
     const scoreAwarded = isCorrect ? calculateQuestionScore(question.difficulty) : 0;
 
     try {
@@ -189,7 +233,7 @@ export async function submitAnswer(
         data: {
           sessionId,
           questionId,
-          submittedAnswer: answer,
+          submittedAnswer,
           normalizedSubmittedAnswer,
           isCorrect,
           scoreAwarded,
@@ -220,16 +264,32 @@ export async function submitAnswer(
           throw error;
         }
 
+        const currentSession = await tx.gameSession.findUnique({
+          where: { id: sessionId },
+        });
+        if (!currentSession) {
+          throw new Error("答题会话不存在。");
+        }
+
+        const nextQuestion = await getAvailableQuestion(tx, sessionId);
+        const finalizedSession = await finalizeSessionAfterTurn(
+          tx,
+          currentSession,
+          nextQuestion,
+        );
+
         return {
-          session: buildSummary(session),
+          session: buildSummary(finalizedSession),
           result: {
             acceptedAnswer: existingAttempt.question.canonicalTitle,
             isCorrect: existingAttempt.isCorrect,
             scoreAwarded: existingAttempt.scoreAwarded,
+            skipped: wasSkippedAttempt(existingAttempt),
           },
-          nextQuestion: await getAvailableQuestion(tx, sessionId).then((next) =>
-            next ? mapQuestion(next) : null,
-          ),
+          nextQuestion:
+            finalizedSession.status === GameSessionStatus.ACTIVE && nextQuestion
+              ? mapQuestion(nextQuestion)
+              : null,
         };
       }
 
@@ -246,25 +306,17 @@ export async function submitAnswer(
     });
 
     const nextQuestion = await getAvailableQuestion(tx, sessionId);
-    const shouldFinish = !nextQuestion || Date.now() >= updatedSession.expiresAt.getTime();
-
-    const finalizedSession = shouldFinish
-      ? await tx.gameSession.update({
-          where: { id: sessionId },
-          data: {
-            status:
-              Date.now() >= updatedSession.expiresAt.getTime()
-                ? GameSessionStatus.EXPIRED
-                : GameSessionStatus.COMPLETED,
-            finishedAt: new Date(),
-          },
-        })
-      : updatedSession;
+    const finalizedSession = await finalizeSessionAfterTurn(
+      tx,
+      updatedSession,
+      nextQuestion,
+    );
 
     const result: AnswerResult = {
       acceptedAnswer: question.canonicalTitle,
       isCorrect,
       scoreAwarded,
+      skipped,
     };
 
     return {
@@ -276,6 +328,18 @@ export async function submitAnswer(
           : null,
     };
   });
+}
+
+export async function submitAnswer(
+  sessionId: string,
+  questionId: string,
+  answer: string,
+) {
+  return resolveQuestionTurn(sessionId, questionId, answer, false);
+}
+
+export async function skipQuestion(sessionId: string, questionId: string) {
+  return resolveQuestionTurn(sessionId, questionId, "", true);
 }
 
 export async function finishGameSession(sessionId: string) {

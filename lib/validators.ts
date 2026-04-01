@@ -13,6 +13,11 @@ export const answerQuestionSchema = z.object({
   answer: z.string().trim().min(1).max(120),
 });
 
+export const skipQuestionSchema = z.object({
+  sessionId: z.string().min(1),
+  questionId: z.string().min(1),
+});
+
 export const finishGameSchema = z.object({
   sessionId: z.string().min(1),
 });
@@ -45,4 +50,3 @@ export const importRowSchema = z.object({
   tags: z.string().trim().optional().default(""),
   active: z.enum(["true", "false"]).default("true"),
 });
-
