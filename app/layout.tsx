@@ -5,7 +5,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "番图冲刺",
-  description: "面向动漫爱好者的截图竞猜网站",
+  description: "看截图，猜作品名，60 秒冲榜。",
 };
 
 export default function RootLayout({
