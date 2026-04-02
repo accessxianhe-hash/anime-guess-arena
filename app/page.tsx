@@ -3,6 +3,7 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { HOME_PREVIEW_LIMIT } from "@/lib/constants";
 import { getLeaderboard } from "@/lib/leaderboard";
+import { downloadQuestionImage } from "@/lib/storage";
 import { formatPercent } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -61,16 +62,29 @@ function normalizeHeroQuestion(record: HeroQuestionRecord | null): HeroQuestion 
     return null;
   }
 
-  const resolvedImageUrl = imageStorageKey
-    ? `/api/question-image?key=${encodeURIComponent(imageStorageKey)}`
-    : imageUrl;
-
   return {
     answer,
-    imageUrl: resolvedImageUrl,
+    imageUrl: imageUrl || imageStorageKey,
     difficulty: record.difficulty?.trim() || "MEDIUM",
     tags: Array.isArray(record.tags) ? record.tags.filter(Boolean) : [],
   };
+}
+
+async function resolveHeroImageSource(question: HeroQuestionRecord | null) {
+  const imageStorageKey = question?.imageStorageKey?.trim();
+  const imageUrl = question?.imageUrl?.trim();
+
+  if (imageStorageKey) {
+    try {
+      const image = await downloadQuestionImage(imageStorageKey);
+      const base64 = Buffer.from(image.body).toString("base64");
+      return `data:${image.contentType};base64,${base64}`;
+    } catch {
+      // Fall back to public URL when storage fetch fails.
+    }
+  }
+
+  return imageUrl || "";
 }
 
 async function getRandomHeroQuestion() {
@@ -102,7 +116,20 @@ async function getRandomHeroQuestion() {
       },
     });
 
-    return normalizeHeroQuestion(question);
+    const normalized = normalizeHeroQuestion(question);
+    if (!normalized) {
+      return null;
+    }
+
+    const resolvedImageUrl = await resolveHeroImageSource(question);
+    if (!resolvedImageUrl) {
+      return null;
+    }
+
+    return {
+      ...normalized,
+      imageUrl: resolvedImageUrl,
+    };
   } catch {
     return null;
   }
