@@ -1,6 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 
+import { prisma } from "@/lib/prisma";
 import { HOME_PREVIEW_LIMIT } from "@/lib/constants";
 import { getLeaderboard } from "@/lib/leaderboard";
 import { formatPercent } from "@/lib/utils";
@@ -12,6 +13,90 @@ async function getPreviewEntries() {
     return await getLeaderboard("daily", HOME_PREVIEW_LIMIT);
   } catch {
     return [];
+  }
+}
+
+type HeroQuestionRecord = {
+  canonicalTitle?: string | null;
+  title?: string | null;
+  animeTitle?: string | null;
+  correctAnswer?: string | null;
+  answer?: string | null;
+  imageUrl?: string | null;
+  image?: string | null;
+  screenshot?: string | null;
+  difficulty?: string | null;
+  tags?: string[] | null;
+};
+
+type HeroQuestion = {
+  answer: string;
+  imageUrl: string;
+  difficulty: string;
+  tags: string[];
+};
+
+function normalizeHeroQuestion(record: HeroQuestionRecord | null): HeroQuestion | null {
+  if (!record) {
+    return null;
+  }
+
+  const answer =
+    record.canonicalTitle?.trim() ||
+    record.correctAnswer?.trim() ||
+    record.answer?.trim() ||
+    record.title?.trim() ||
+    record.animeTitle?.trim() ||
+    "";
+
+  const imageUrl =
+    record.imageUrl?.trim() ||
+    record.screenshot?.trim() ||
+    record.image?.trim() ||
+    "";
+
+  if (!answer || !imageUrl) {
+    return null;
+  }
+
+  return {
+    answer,
+    imageUrl,
+    difficulty: record.difficulty?.trim() || "MEDIUM",
+    tags: Array.isArray(record.tags) ? record.tags.filter(Boolean) : [],
+  };
+}
+
+async function getRandomHeroQuestion() {
+  try {
+    const total = await prisma.question.count({
+      where: {
+        active: true,
+      },
+    });
+
+    if (total === 0) {
+      return null;
+    }
+
+    const offset = Math.floor(Math.random() * total);
+    const question = await prisma.question.findFirst({
+      where: {
+        active: true,
+      },
+      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+      skip: offset,
+      select: {
+        canonicalTitle: true,
+        imageUrl: true,
+        difficulty: true,
+        tags: true,
+      },
+    });
+
+    return normalizeHeroQuestion(question);
+  } catch {
+    return null;
   }
 }
 
@@ -33,29 +118,21 @@ const quickSteps = [
   },
 ];
 
-const heroFrames = [
-  {
-    src: "/home/scene-golden-court.svg",
-    alt: "夕阳球场动画场景",
-    className: "visual-frame visual-frame-main",
-    label: "截图题面",
-  },
-  {
-    src: "/home/scene-city-rain.svg",
-    alt: "雨夜城市动画场景",
-    className: "visual-frame visual-frame-top",
-    label: "夜景镜头",
-  },
-  {
-    src: "/home/scene-window-train.svg",
-    alt: "列车窗边动画场景",
-    className: "visual-frame visual-frame-bottom",
-    label: "静态镜头",
-  },
-];
-
 export default async function HomePage() {
-  const previewEntries = await getPreviewEntries();
+  const [previewEntries, heroQuestion] = await Promise.all([
+    getPreviewEntries(),
+    getRandomHeroQuestion(),
+  ]);
+
+  const visualFrameSource = heroQuestion?.imageUrl ?? "/home/scene-golden-court.svg";
+  const visualAnswer = heroQuestion?.answer ?? "等待题库导入";
+  const visualTags = heroQuestion?.tags.slice(0, 2) ?? [];
+  const visualDifficulty =
+    heroQuestion?.difficulty === "HARD"
+      ? "高难度"
+      : heroQuestion?.difficulty === "EASY"
+        ? "轻松题"
+        : "随机题库";
 
   return (
     <div className="home-page">
@@ -97,19 +174,43 @@ export default async function HomePage() {
 
         <div className="landing-visual" aria-hidden="true">
           <div className="visual-poster">
-            {heroFrames.map((frame) => (
-              <figure key={frame.src} className={frame.className}>
-                <Image
-                  src={frame.src}
-                  alt={frame.alt}
-                  width={1280}
-                  height={720}
-                  className="visual-image"
-                  priority={frame.className.includes("main")}
-                />
-                <figcaption className="visual-frame-label">{frame.label}</figcaption>
-              </figure>
-            ))}
+            <figure className="visual-frame visual-frame-main">
+              <Image
+                src={visualFrameSource}
+                alt=""
+                width={1280}
+                height={720}
+                className="visual-image"
+                priority
+              />
+              <figcaption className="visual-frame-label">
+                {heroQuestion ? "随机题库截图" : "题库待补充"}
+              </figcaption>
+            </figure>
+
+            <figure className="visual-frame visual-frame-top">
+              <Image
+                src={visualFrameSource}
+                alt=""
+                width={1280}
+                height={720}
+                className="visual-image visual-image-shifted"
+              />
+              <figcaption className="visual-frame-label">{visualDifficulty}</figcaption>
+            </figure>
+
+            <figure className="visual-frame visual-frame-bottom">
+              <Image
+                src={visualFrameSource}
+                alt=""
+                width={1280}
+                height={720}
+                className="visual-image visual-image-soft"
+              />
+              <figcaption className="visual-frame-label">
+                {visualTags[0] ?? "截图猜番"}
+              </figcaption>
+            </figure>
 
             <div className="visual-quiz-card">
               <div className="visual-quiz-top">
@@ -119,11 +220,11 @@ export default async function HomePage() {
               <p className="visual-quiz-prompt">这一幕出自哪部作品？</p>
               <div className="visual-quiz-input">
                 <span>输入作品名</span>
-                <strong>进击的巨人？</strong>
+                <strong>{visualAnswer}</strong>
               </div>
               <div className="visual-quiz-meta">
-                <span>答对加分</span>
-                <span>不会就跳过</span>
+                <span>{visualTags[1] ?? "答对加分"}</span>
+                <span>{heroQuestion ? "刷新会换题" : "等待入库"}</span>
               </div>
             </div>
           </div>

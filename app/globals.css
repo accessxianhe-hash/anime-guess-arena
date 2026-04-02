@@ -1198,6 +1198,7 @@ code {
   left: 20px;
   right: 68px;
   z-index: 2;
+  aspect-ratio: 16 / 9;
 }
 
 .visual-frame-top {
@@ -1205,6 +1206,7 @@ code {
   right: 24px;
   width: 208px;
   z-index: 1;
+  aspect-ratio: 4 / 3;
   transform: rotate(3deg);
 }
 
@@ -1213,12 +1215,24 @@ code {
   bottom: 28px;
   width: 238px;
   z-index: 1;
+  aspect-ratio: 4 / 3;
   transform: rotate(-4deg);
 }
 
 .visual-image {
   width: 100%;
-  height: auto;
+  height: 100%;
+  object-fit: cover;
+}
+
+.visual-image-shifted {
+  object-position: center 28%;
+  filter: saturate(1.02);
+}
+
+.visual-image-soft {
+  object-position: center 70%;
+  filter: brightness(1.04) saturate(0.92);
 }
 
 .visual-frame-label {
