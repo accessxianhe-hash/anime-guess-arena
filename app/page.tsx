@@ -1,4 +1,3 @@
-import Image from "next/image";
 import Link from "next/link";
 
 import { prisma } from "@/lib/prisma";
@@ -175,36 +174,25 @@ export default async function HomePage() {
         <div className="landing-visual" aria-hidden="true">
           <div className="visual-poster">
             <figure className="visual-frame visual-frame-main">
-              <Image
-                src={visualFrameSource}
-                alt=""
-                width={1280}
-                height={720}
-                className="visual-image"
-                priority
-              />
+              <img src={visualFrameSource} alt="" className="visual-image" />
               <figcaption className="visual-frame-label">
                 {heroQuestion ? "随机题库截图" : "题库待补充"}
               </figcaption>
             </figure>
 
             <figure className="visual-frame visual-frame-top">
-              <Image
+              <img
                 src={visualFrameSource}
                 alt=""
-                width={1280}
-                height={720}
                 className="visual-image visual-image-shifted"
               />
               <figcaption className="visual-frame-label">{visualDifficulty}</figcaption>
             </figure>
 
             <figure className="visual-frame visual-frame-bottom">
-              <Image
+              <img
                 src={visualFrameSource}
                 alt=""
-                width={1280}
-                height={720}
                 className="visual-image visual-image-soft"
               />
               <figcaption className="visual-frame-label">
