@@ -16,12 +16,14 @@ async function getPreviewEntries() {
 }
 
 type HeroQuestionRecord = {
+  id?: string | null;
   canonicalTitle?: string | null;
   title?: string | null;
   animeTitle?: string | null;
   correctAnswer?: string | null;
   answer?: string | null;
   imageUrl?: string | null;
+  imageStorageKey?: string | null;
   image?: string | null;
   screenshot?: string | null;
   difficulty?: string | null;
@@ -53,14 +55,19 @@ function normalizeHeroQuestion(record: HeroQuestionRecord | null): HeroQuestion 
     record.screenshot?.trim() ||
     record.image?.trim() ||
     "";
+  const imageStorageKey = record.imageStorageKey?.trim() || "";
 
-  if (!answer || !imageUrl) {
+  if (!answer || (!imageUrl && !imageStorageKey)) {
     return null;
   }
 
+  const resolvedImageUrl = imageStorageKey
+    ? `/api/question-image?key=${encodeURIComponent(imageStorageKey)}`
+    : imageUrl;
+
   return {
     answer,
-    imageUrl,
+    imageUrl: resolvedImageUrl,
     difficulty: record.difficulty?.trim() || "MEDIUM",
     tags: Array.isArray(record.tags) ? record.tags.filter(Boolean) : [],
   };
@@ -86,8 +93,10 @@ async function getRandomHeroQuestion() {
       orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
       skip: offset,
       select: {
+        id: true,
         canonicalTitle: true,
         imageUrl: true,
+        imageStorageKey: true,
         difficulty: true,
         tags: true,
       },

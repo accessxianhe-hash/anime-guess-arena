@@ -1,5 +1,10 @@
-import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -11,6 +16,11 @@ import {
 type UploadResult = {
   storageKey: string;
   publicUrl: string;
+};
+
+type DownloadResult = {
+  body: Uint8Array;
+  contentType: string;
 };
 
 function sanitizeFilename(filename: string) {
@@ -41,6 +51,32 @@ function getS3Client() {
           }
         : undefined,
   });
+}
+
+function guessContentType(filename: string) {
+  const lower = filename.toLowerCase();
+
+  if (lower.endsWith(".png")) {
+    return "image/png";
+  }
+
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
+    return "image/jpeg";
+  }
+
+  if (lower.endsWith(".webp")) {
+    return "image/webp";
+  }
+
+  if (lower.endsWith(".gif")) {
+    return "image/gif";
+  }
+
+  if (lower.endsWith(".avif")) {
+    return "image/avif";
+  }
+
+  return "application/octet-stream";
 }
 
 export async function uploadQuestionImage(
@@ -111,4 +147,37 @@ export async function deleteQuestionImage(storageKey: string | null | undefined)
 
   const target = path.join(process.cwd(), "public", "uploads", storageKey);
   await rm(target, { force: true });
+}
+
+export async function downloadQuestionImage(
+  storageKey: string,
+): Promise<DownloadResult> {
+  const storageProvider = getStorageProvider();
+
+  if (storageProvider === "s3") {
+    const client = getS3Client();
+    const result = await client.send(
+      new GetObjectCommand({
+        Bucket: process.env.S3_BUCKET!,
+        Key: storageKey,
+      }),
+    );
+
+    const body = result.Body;
+    if (!body || !("transformToByteArray" in body)) {
+      throw new Error("Unable to read object body from storage.");
+    }
+
+    return {
+      body: await body.transformToByteArray(),
+      contentType: result.ContentType ?? guessContentType(storageKey),
+    };
+  }
+
+  const target = path.join(process.cwd(), "public", "uploads", storageKey);
+
+  return {
+    body: await readFile(target),
+    contentType: guessContentType(storageKey),
+  };
 }
