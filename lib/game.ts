@@ -21,6 +21,8 @@ const INTERACTIVE_TX_OPTIONS = {
   timeout: 30_000,
 } as const;
 
+type GameClient = Prisma.TransactionClient | typeof prisma;
+
 type QuestionPayload = {
   id: string;
   canonicalTitle: string;
@@ -98,10 +100,10 @@ function wasSkippedAttempt(attempt: {
 }
 
 async function getAvailableQuestion(
-  tx: Prisma.TransactionClient,
+  client: GameClient,
   sessionId: string,
 ) {
-  return tx.question.findFirst({
+  return client.question.findFirst({
     where: {
       active: true,
       attempts: {
@@ -123,7 +125,7 @@ async function getAvailableQuestion(
 }
 
 async function finalizeSessionAfterTurn(
-  tx: Prisma.TransactionClient,
+  client: GameClient,
   session: GameSessionRecord,
   nextQuestion: QuestionPayload | null,
 ) {
@@ -133,7 +135,7 @@ async function finalizeSessionAfterTurn(
 
   const expired = Date.now() >= session.expiresAt.getTime();
   if (!nextQuestion || expired) {
-    return tx.gameSession.update({
+    return client.gameSession.update({
       where: { id: session.id },
       data: {
         status: expired
@@ -148,10 +150,10 @@ async function finalizeSessionAfterTurn(
 }
 
 async function expireSessionIfNeeded(
-  tx: Prisma.TransactionClient,
+  client: GameClient,
   sessionId: string,
 ) {
-  const session = await tx.gameSession.findUnique({
+  const session = await client.gameSession.findUnique({
     where: { id: sessionId },
   });
 
@@ -163,7 +165,7 @@ async function expireSessionIfNeeded(
     session.status === GameSessionStatus.ACTIVE &&
     Date.now() >= session.expiresAt.getTime()
   ) {
-    return tx.gameSession.update({
+    return client.gameSession.update({
       where: { id: sessionId },
       data: {
         status: GameSessionStatus.EXPIRED,
@@ -176,24 +178,22 @@ async function expireSessionIfNeeded(
 }
 
 export async function startGameSession() {
-  return prisma.$transaction(async (tx) => {
-    const expiresAt = new Date(Date.now() + GAME_DURATION_SECONDS * 1000);
-    const session = await tx.gameSession.create({
-      data: {
-        expiresAt,
-      },
-    });
+  const expiresAt = new Date(Date.now() + GAME_DURATION_SECONDS * 1000);
+  const session = await prisma.gameSession.create({
+    data: {
+      expiresAt,
+    },
+  });
 
-    const question = await getAvailableQuestion(tx, session.id);
-    if (!question) {
-      throw new Error("未能抽取题目，请稍后再试。");
-    }
+  const question = await getAvailableQuestion(prisma, session.id);
+  if (!question) {
+    throw new Error("未能抽取题目，请稍后再试。");
+  }
 
-    return {
-      session: buildSummary(session),
-      question: mapQuestion(question),
-    };
-  }, INTERACTIVE_TX_OPTIONS);
+  return {
+    session: buildSummary(session),
+    question: mapQuestion(question),
+  };
 }
 
 async function resolveQuestionTurn(
@@ -202,57 +202,57 @@ async function resolveQuestionTurn(
   submittedAnswer: string,
   skipped: boolean,
 ) {
-  return prisma.$transaction(async (tx) => {
-    const session = await expireSessionIfNeeded(tx, sessionId);
-    if (session.status !== GameSessionStatus.ACTIVE) {
-      return {
-        session: buildSummary(session),
-        result: null,
-        nextQuestion: null,
-      };
-    }
+  const session = await expireSessionIfNeeded(prisma, sessionId);
+  if (session.status !== GameSessionStatus.ACTIVE) {
+    return {
+      session: buildSummary(session),
+      result: null,
+      nextQuestion: null,
+    };
+  }
 
-    const question = await tx.question.findUnique({
-      where: {
-        id: questionId,
-      },
-      include: {
-        aliases: true,
+  const question = await prisma.question.findUnique({
+    where: {
+      id: questionId,
+    },
+    include: {
+      aliases: true,
+    },
+  });
+
+  if (!question || !question.active) {
+    throw new Error("题目不存在或已下架。");
+  }
+
+  const normalizedSubmittedAnswer = skipped
+    ? ""
+    : normalizeAnswer(submittedAnswer);
+  const isCorrect =
+    !skipped &&
+    (normalizedSubmittedAnswer === question.normalizedCanonicalTitle ||
+      question.aliases.some(
+        (alias) => alias.normalizedAlias === normalizedSubmittedAnswer,
+      ));
+  const scoreAwarded = isCorrect ? calculateQuestionScore(question.difficulty) : 0;
+
+  try {
+    await prisma.answerAttempt.create({
+      data: {
+        sessionId,
+        questionId,
+        submittedAnswer,
+        normalizedSubmittedAnswer,
+        isCorrect,
+        scoreAwarded,
       },
     });
-
-    if (!question || !question.active) {
-      throw new Error("题目不存在或已下架。");
-    }
-
-    const normalizedSubmittedAnswer = skipped
-      ? ""
-      : normalizeAnswer(submittedAnswer);
-    const isCorrect =
-      !skipped &&
-      (normalizedSubmittedAnswer === question.normalizedCanonicalTitle ||
-        question.aliases.some(
-          (alias) => alias.normalizedAlias === normalizedSubmittedAnswer,
-        ));
-    const scoreAwarded = isCorrect ? calculateQuestionScore(question.difficulty) : 0;
-
-    try {
-      await tx.answerAttempt.create({
-        data: {
-          sessionId,
-          questionId,
-          submittedAnswer,
-          normalizedSubmittedAnswer,
-          isCorrect,
-          scoreAwarded,
-        },
-      });
-    } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === "P2002"
-      ) {
-        const existingAttempt = await tx.answerAttempt.findUnique({
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      const [existingAttempt, currentSession] = await Promise.all([
+        prisma.answerAttempt.findUnique({
           where: {
             sessionId_questionId: {
               sessionId,
@@ -266,76 +266,78 @@ async function resolveQuestionTurn(
               },
             },
           },
-        });
-
-        if (!existingAttempt) {
-          throw error;
-        }
-
-        const currentSession = await tx.gameSession.findUnique({
+        }),
+        prisma.gameSession.findUnique({
           where: { id: sessionId },
-        });
-        if (!currentSession) {
-          throw new Error("答题会话不存在。");
-        }
+        }),
+      ]);
 
-        const nextQuestion = await getAvailableQuestion(tx, sessionId);
-        const finalizedSession = await finalizeSessionAfterTurn(
-          tx,
-          currentSession,
-          nextQuestion,
-        );
-
-        return {
-          session: buildSummary(finalizedSession),
-          result: {
-            acceptedAnswer: existingAttempt.question.canonicalTitle,
-            isCorrect: existingAttempt.isCorrect,
-            scoreAwarded: existingAttempt.scoreAwarded,
-            skipped: wasSkippedAttempt(existingAttempt),
-          },
-          nextQuestion:
-            finalizedSession.status === GameSessionStatus.ACTIVE && nextQuestion
-              ? mapQuestion(nextQuestion)
-              : null,
-        };
+      if (!existingAttempt) {
+        throw error;
       }
 
-      throw error;
+      if (!currentSession) {
+        throw new Error("答题会话不存在。");
+      }
+
+      const nextQuestion = await getAvailableQuestion(prisma, sessionId);
+      const finalizedSession = await finalizeSessionAfterTurn(
+        prisma,
+        currentSession,
+        nextQuestion,
+      );
+
+      return {
+        session: buildSummary(finalizedSession),
+        result: {
+          acceptedAnswer: existingAttempt.question.canonicalTitle,
+          isCorrect: existingAttempt.isCorrect,
+          scoreAwarded: existingAttempt.scoreAwarded,
+          skipped: wasSkippedAttempt(existingAttempt),
+        },
+        nextQuestion:
+          finalizedSession.status === GameSessionStatus.ACTIVE && nextQuestion
+            ? mapQuestion(nextQuestion)
+            : null,
+      };
     }
 
-    const updatedSession = await tx.gameSession.update({
+    throw error;
+  }
+
+  const [updatedSession, nextQuestion] = await Promise.all([
+    prisma.gameSession.update({
       where: { id: sessionId },
       data: {
         score: { increment: scoreAwarded },
         correctCount: { increment: isCorrect ? 1 : 0 },
         answeredCount: { increment: skipped ? 0 : 1 },
       },
-    });
+    }),
+    getAvailableQuestion(prisma, sessionId),
+  ]);
 
-    const nextQuestion = await getAvailableQuestion(tx, sessionId);
-    const finalizedSession = await finalizeSessionAfterTurn(
-      tx,
-      updatedSession,
-      nextQuestion,
-    );
+  const finalizedSession = await finalizeSessionAfterTurn(
+    prisma,
+    updatedSession,
+    nextQuestion,
+  );
 
-    const result: AnswerResult = {
-      acceptedAnswer: question.canonicalTitle,
-      isCorrect,
-      scoreAwarded,
-      skipped,
-    };
+  const result: AnswerResult = {
+    acceptedAnswer: question.canonicalTitle,
+    isCorrect,
+    scoreAwarded,
+    skipped,
+  };
 
-    return {
-      session: buildSummary(finalizedSession),
-      result,
-      nextQuestion:
-        finalizedSession.status === GameSessionStatus.ACTIVE && nextQuestion
-          ? mapQuestion(nextQuestion)
-          : null,
-    };
-  }, INTERACTIVE_TX_OPTIONS);
+  return {
+    session: buildSummary(finalizedSession),
+    result,
+    nextQuestion:
+      finalizedSession.status === GameSessionStatus.ACTIVE && nextQuestion
+        ? mapQuestion(nextQuestion)
+        : null,
+  };
 }
 
 export async function submitAnswer(

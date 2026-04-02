@@ -31,8 +31,8 @@ type FeedbackState = {
   skipped: boolean;
 } | null;
 
-const MIN_FEEDBACK_MS = 280;
-const NEXT_IMAGE_PRELOAD_TIMEOUT_MS = 900;
+const MIN_FEEDBACK_MS = 160;
+const NEXT_QUESTION_DELAY_MS = 60;
 
 const difficultyText = {
   EASY: "简单",
@@ -51,7 +51,6 @@ export function PlayClient() {
   const [isPending, startTransition] = useTransition();
   const finishTriggeredRef = useRef(false);
   const advanceTimerRef = useRef<number | null>(null);
-  const preloadTimeoutRef = useRef<number | null>(null);
   const remainingMs = useCountdown(
     session?.expiresAt ?? null,
     session?.serverNow ?? null,
@@ -62,10 +61,6 @@ export function PlayClient() {
     return () => {
       if (advanceTimerRef.current !== null) {
         window.clearTimeout(advanceTimerRef.current);
-      }
-
-      if (preloadTimeoutRef.current !== null) {
-        window.clearTimeout(preloadTimeoutRef.current);
       }
     };
   }, []);
@@ -155,11 +150,6 @@ export function PlayClient() {
       advanceTimerRef.current = null;
     }
 
-    if (preloadTimeoutRef.current !== null) {
-      window.clearTimeout(preloadTimeoutRef.current);
-      preloadTimeoutRef.current = null;
-    }
-
     if (!nextQuestion) {
       advanceTimerRef.current = window.setTimeout(() => {
         setFeedback(null);
@@ -168,33 +158,16 @@ export function PlayClient() {
       return;
     }
 
-    const preloadStartedAt = performance.now();
-    let revealed = false;
+    // Warm the next image, but don't block the UI on preload completion.
+    if (nextQuestion.imageUrl) {
+      const image = new window.Image();
+      image.src = nextQuestion.imageUrl;
+    }
 
-    const revealNextQuestion = () => {
-      if (revealed) {
-        return;
-      }
-
-      revealed = true;
-      const elapsed = performance.now() - preloadStartedAt;
-      const remainingDelay = Math.max(0, MIN_FEEDBACK_MS - elapsed);
-
-      advanceTimerRef.current = window.setTimeout(() => {
-        setFeedback(null);
-        setQuestion(nextQuestion);
-      }, remainingDelay);
-    };
-
-    const image = new window.Image();
-    image.onload = revealNextQuestion;
-    image.onerror = revealNextQuestion;
-    image.src = nextQuestion.imageUrl;
-
-    preloadTimeoutRef.current = window.setTimeout(
-      revealNextQuestion,
-      NEXT_IMAGE_PRELOAD_TIMEOUT_MS,
-    );
+    advanceTimerRef.current = window.setTimeout(() => {
+      setFeedback(null);
+      setQuestion(nextQuestion);
+    }, NEXT_QUESTION_DELAY_MS);
   }
 
   async function resolveTurn(
