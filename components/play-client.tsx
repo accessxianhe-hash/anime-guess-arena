@@ -43,6 +43,8 @@ const difficultyText = {
 export function PlayClient() {
   const [session, setSession] = useState<SessionSummary | null>(null);
   const [question, setQuestion] = useState<CurrentQuestion>(null);
+  const [displayedImageSrc, setDisplayedImageSrc] = useState<string | null>(null);
+  const [isQuestionImageReady, setIsQuestionImageReady] = useState(false);
   const [answer, setAnswer] = useState("");
   const [feedback, setFeedback] = useState<FeedbackState>(null);
   const [error, setError] = useState<string | null>(null);
@@ -51,11 +53,57 @@ export function PlayClient() {
   const [isPending, startTransition] = useTransition();
   const finishTriggeredRef = useRef(false);
   const advanceTimerRef = useRef<number | null>(null);
+  const loadedImageCacheRef = useRef<Set<string>>(new Set());
+  const inflightImageLoadsRef = useRef<Map<string, Promise<void>>>(new Map());
   const remainingMs = useCountdown(
     session?.expiresAt ?? null,
     session?.serverNow ?? null,
     session?.status ?? "ACTIVE",
   );
+
+  function primeImage(src: string | null | undefined) {
+    if (!src) {
+      return Promise.resolve();
+    }
+
+    if (loadedImageCacheRef.current.has(src)) {
+      return Promise.resolve();
+    }
+
+    const inflightRequest = inflightImageLoadsRef.current.get(src);
+    if (inflightRequest) {
+      return inflightRequest;
+    }
+
+    const request = new Promise<void>((resolve) => {
+      const image = new window.Image();
+
+      try {
+        image.fetchPriority = "high";
+      } catch {}
+
+      image.decoding = "async";
+      image.onload = async () => {
+        try {
+          if (typeof image.decode === "function") {
+            await image.decode();
+          }
+        } catch {}
+
+        loadedImageCacheRef.current.add(src);
+        inflightImageLoadsRef.current.delete(src);
+        resolve();
+      };
+      image.onerror = () => {
+        inflightImageLoadsRef.current.delete(src);
+        resolve();
+      };
+      image.src = src;
+    });
+
+    inflightImageLoadsRef.current.set(src, request);
+    return request;
+  }
 
   useEffect(() => {
     return () => {
@@ -64,6 +112,39 @@ export function PlayClient() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (!question?.imageUrl) {
+      setDisplayedImageSrc(null);
+      setIsQuestionImageReady(false);
+      return;
+    }
+
+    const nextImageSrc = question.imageUrl;
+    let cancelled = false;
+
+    if (loadedImageCacheRef.current.has(nextImageSrc)) {
+      setDisplayedImageSrc(nextImageSrc);
+      setIsQuestionImageReady(true);
+      return;
+    }
+
+    setDisplayedImageSrc(null);
+    setIsQuestionImageReady(false);
+
+    void primeImage(nextImageSrc).then(() => {
+      if (cancelled) {
+        return;
+      }
+
+      setDisplayedImageSrc(nextImageSrc);
+      setIsQuestionImageReady(true);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [question?.id, question?.imageUrl]);
 
   useEffect(() => {
     let cancelled = false;
@@ -158,11 +239,7 @@ export function PlayClient() {
       return;
     }
 
-    // Warm the next image, but don't block the UI on preload completion.
-    if (nextQuestion.imageUrl) {
-      const image = new window.Image();
-      image.src = nextQuestion.imageUrl;
-    }
+    void primeImage(nextQuestion.imageUrl);
 
     advanceTimerRef.current = window.setTimeout(() => {
       setFeedback(null);
@@ -295,13 +372,20 @@ export function PlayClient() {
 
         {question ? (
           <>
-            <div className="play-image">
-              <img
-                src={question.imageUrl}
-                alt="动漫截图题目"
-                loading="eager"
-                decoding="async"
-              />
+            <div className={`play-image ${!isQuestionImageReady ? "play-image-loading" : ""}`}>
+              {displayedImageSrc ? (
+                <img
+                  key={`${question.id}-${displayedImageSrc}`}
+                  src={displayedImageSrc}
+                  alt="动漫截图题目"
+                  loading="eager"
+                  decoding="async"
+                />
+              ) : (
+                <div className="play-image-placeholder">
+                  <span>正在加载下一张题图...</span>
+                </div>
+              )}
             </div>
             <div className="label-row">
               <span className="pill">难度: {difficultyText[question.difficulty]}</span>

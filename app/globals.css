@@ -463,16 +463,58 @@ code {
 
 .play-image {
   aspect-ratio: 16 / 9;
+  position: relative;
   overflow: hidden;
   border-radius: 26px;
   border: 1px solid var(--line);
   background: #060a13;
 }
 
+.play-image-loading {
+  background:
+    linear-gradient(135deg, rgba(97, 117, 177, 0.26), rgba(12, 17, 31, 0.92)),
+    #060a13;
+}
+
 .play-image img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.play-image-placeholder {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  padding: 20px;
+  text-align: center;
+  color: rgba(226, 232, 248, 0.86);
+  background:
+    linear-gradient(
+      110deg,
+      rgba(255, 255, 255, 0.03) 0%,
+      rgba(255, 255, 255, 0.08) 22%,
+      rgba(255, 255, 255, 0.03) 44%
+    ),
+    linear-gradient(135deg, rgba(103, 122, 182, 0.28), rgba(15, 21, 38, 0.94));
+  background-size: 220% 100%, 100% 100%;
+  animation: playImageShimmer 0.9s linear infinite;
+}
+
+.play-image-placeholder span {
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+}
+
+@keyframes playImageShimmer {
+  from {
+    background-position: 200% 0, 0 0;
+  }
+
+  to {
+    background-position: -20% 0, 0 0;
+  }
 }
 
 .countdown {
