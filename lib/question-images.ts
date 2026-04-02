@@ -5,19 +5,17 @@ export function buildQuestionImageSrc(
   const storageKey = imageStorageKey?.trim();
   const sourceUrl = imageUrl?.trim();
 
-  if (!storageKey && !sourceUrl) {
+  if (sourceUrl) {
+    return sourceUrl;
+  }
+
+  if (!storageKey) {
     return "";
   }
 
   const params = new URLSearchParams();
 
-  if (storageKey) {
-    params.set("key", storageKey);
-  }
-
-  if (sourceUrl) {
-    params.set("url", sourceUrl);
-  }
+  params.set("key", storageKey);
 
   return `/api/question-image?${params.toString()}`;
 }
