@@ -8,6 +8,11 @@ import { prisma } from "@/lib/prisma";
 import { deleteQuestionImage, uploadQuestionImage } from "@/lib/storage";
 import { importRowSchema, questionFormSchema } from "@/lib/validators";
 
+const INTERACTIVE_TX_OPTIONS = {
+  maxWait: 10_000,
+  timeout: 30_000,
+} as const;
+
 export async function requireAdminSession() {
   const session = await auth();
   if (!session?.user?.id) {
@@ -207,7 +212,7 @@ export async function saveQuestion(
       }
 
       return question;
-    });
+    }, INTERACTIVE_TX_OPTIONS);
 
     return updated;
   }
@@ -394,7 +399,7 @@ export async function importQuestionsFromArchive(file: File): Promise<ImportResu
             skipDuplicates: true,
           });
         }
-      });
+      }, INTERACTIVE_TX_OPTIONS);
 
       imported += 1;
     } catch (error) {

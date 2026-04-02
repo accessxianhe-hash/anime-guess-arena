@@ -13,12 +13,19 @@ import {
 } from "@/lib/answers";
 import { calculateAccuracy, calculateDurationMs } from "@/lib/leaderboard";
 import { prisma } from "@/lib/prisma";
+import { buildQuestionImageSrc } from "@/lib/question-images";
 import { toDateKey } from "@/lib/timezone";
+
+const INTERACTIVE_TX_OPTIONS = {
+  maxWait: 10_000,
+  timeout: 30_000,
+} as const;
 
 type QuestionPayload = {
   id: string;
   canonicalTitle: string;
   imageUrl: string;
+  imageStorageKey: string | null;
   difficulty: Difficulty;
   tags: string[];
 };
@@ -57,7 +64,7 @@ type GameSessionRecord = {
 function mapQuestion(question: QuestionPayload) {
   return {
     id: question.id,
-    imageUrl: question.imageUrl,
+    imageUrl: buildQuestionImageSrc(question.imageStorageKey, question.imageUrl),
     difficulty: question.difficulty,
     tags: question.tags,
   };
@@ -108,6 +115,7 @@ async function getAvailableQuestion(
       id: true,
       canonicalTitle: true,
       imageUrl: true,
+      imageStorageKey: true,
       difficulty: true,
       tags: true,
     },
@@ -185,7 +193,7 @@ export async function startGameSession() {
       session: buildSummary(session),
       question: mapQuestion(question),
     };
-  });
+  }, INTERACTIVE_TX_OPTIONS);
 }
 
 async function resolveQuestionTurn(
@@ -327,7 +335,7 @@ async function resolveQuestionTurn(
           ? mapQuestion(nextQuestion)
           : null,
     };
-  });
+  }, INTERACTIVE_TX_OPTIONS);
 }
 
 export async function submitAnswer(
@@ -369,7 +377,7 @@ export async function finishGameSession(sessionId: string) {
     });
 
     return buildSummary(finished);
-  });
+  }, INTERACTIVE_TX_OPTIONS);
 }
 
 export async function submitLeaderboardEntry(sessionId: string, nickname: string) {
@@ -491,5 +499,5 @@ export async function submitLeaderboardEntry(sessionId: string, nickname: string
       where: { sessionId },
       orderBy: [{ scope: "asc" }],
     });
-  });
+  }, INTERACTIVE_TX_OPTIONS);
 }
