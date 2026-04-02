@@ -15,36 +15,42 @@ async function getPreviewEntries() {
   }
 }
 
-const playNotes = [
+const quickSteps = [
   {
-    title: "看图",
-    copy: "题图出现后，直接输入作品名。",
+    number: "01",
+    title: "开局即出图",
+    copy: "不用读规则，画面出现就能直接作答。",
   },
   {
-    title: "作答",
-    copy: "答不上就跳过，下一题立刻接上。",
+    number: "02",
+    title: "不会就跳过",
+    copy: "卡住时立刻切下一题，把时间留给熟悉的作品。",
   },
   {
-    title: "冲榜",
-    copy: "60 秒结算一局，分数当天上榜。",
+    number: "03",
+    title: "60 秒冲榜",
+    copy: "一局结束马上结算，分数当天上榜。",
   },
 ];
 
-const heroShots = [
+const heroFrames = [
   {
-    src: "/demo/wall-breaker.svg",
-    alt: "动画截图示意一",
-    className: "hero-shot-main",
+    src: "/home/scene-golden-court.svg",
+    alt: "夕阳球场动画场景",
+    className: "visual-frame visual-frame-main",
+    label: "截图题面",
   },
   {
-    src: "/demo/ninja-dawn.svg",
-    alt: "动画截图示意二",
-    className: "hero-shot-small hero-shot-top",
+    src: "/home/scene-city-rain.svg",
+    alt: "雨夜城市动画场景",
+    className: "visual-frame visual-frame-top",
+    label: "夜景镜头",
   },
   {
-    src: "/demo/ocean-dream.svg",
-    alt: "动画截图示意三",
-    className: "hero-shot-small hero-shot-bottom",
+    src: "/home/scene-window-train.svg",
+    alt: "列车窗边动画场景",
+    className: "visual-frame visual-frame-bottom",
+    label: "静态镜头",
   },
 ];
 
@@ -53,99 +59,102 @@ export default async function HomePage() {
 
   return (
     <div className="home-page">
-      <section className="home-hero">
-        <div className="home-copy">
-          <p className="home-kicker">截图猜番</p>
-          <h1 className="home-title">看一张图，立刻说出作品名。</h1>
-          <p className="home-subtitle">60 秒一局，答对加分，答不上就跳过。</p>
+      <section className="landing-hero">
+        <div className="landing-copy">
+          <p className="landing-kicker">Anime Screenshot Guess</p>
+          <div className="landing-title-block">
+            <span className="landing-accent">60 秒冲榜</span>
+            <h1 className="landing-title">
+              <span>看一张截图</span>
+              <span>立刻说出作品名</span>
+            </h1>
+          </div>
+          <p className="landing-subtitle">
+            从熟悉的画面里认出番剧。答得越快，分数越高。
+          </p>
 
-          <div className="home-actions">
-            <Link href="/play" className="home-button home-button-primary">
+          <div className="landing-actions">
+            <Link href="/play" className="landing-button landing-button-primary">
               开始挑战
             </Link>
-            <Link href="/leaderboard" className="home-button home-button-secondary">
+            <Link href="/leaderboard" className="landing-button landing-button-secondary">
               查看排行榜
             </Link>
           </div>
 
-          <div className="home-note-list" aria-label="玩法摘要">
-            {playNotes.map((note) => (
-              <article key={note.title} className="home-note-item">
-                <strong>{note.title}</strong>
-                <p>{note.copy}</p>
-              </article>
+          <ul className="landing-steps" aria-label="玩法说明">
+            {quickSteps.map((step) => (
+              <li key={step.number} className="landing-step">
+                <span className="landing-step-number">{step.number}</span>
+                <div className="landing-step-copy">
+                  <strong>{step.title}</strong>
+                  <p>{step.copy}</p>
+                </div>
+              </li>
             ))}
-          </div>
+          </ul>
         </div>
 
-        <div className="home-visual" aria-hidden="true">
-          <div className="hero-board">
-            <div className="hero-board-stage">
-              <div className="hero-board-screen">
-                <span className="hero-board-timer">00:43</span>
+        <div className="landing-visual" aria-hidden="true">
+          <div className="visual-poster">
+            {heroFrames.map((frame) => (
+              <figure key={frame.src} className={frame.className}>
                 <Image
-                  src={heroShots[0].src}
-                  alt={heroShots[0].alt}
+                  src={frame.src}
+                  alt={frame.alt}
                   width={1280}
                   height={720}
-                  className={heroShots[0].className}
+                  className="visual-image"
+                  priority={frame.className.includes("main")}
                 />
-                <div className="hero-answer-bar">
-                  <span>输入作品名</span>
-                  <strong>进击的巨人？</strong>
-                </div>
+                <figcaption className="visual-frame-label">{frame.label}</figcaption>
+              </figure>
+            ))}
+
+            <div className="visual-quiz-card">
+              <div className="visual-quiz-top">
+                <span>Round 07</span>
+                <span>00:43</span>
               </div>
-
-              <Image
-                src={heroShots[1].src}
-                alt={heroShots[1].alt}
-                width={1280}
-                height={720}
-                className={heroShots[1].className}
-              />
-              <Image
-                src={heroShots[2].src}
-                alt={heroShots[2].alt}
-                width={1280}
-                height={720}
-                className={heroShots[2].className}
-              />
-            </div>
-
-            <div className="hero-board-meta">
-              <span>截图识别</span>
-              <span>60 秒冲榜</span>
-              <span>同局不重复</span>
+              <p className="visual-quiz-prompt">这一幕出自哪部作品？</p>
+              <div className="visual-quiz-input">
+                <span>输入作品名</span>
+                <strong>进击的巨人？</strong>
+              </div>
+              <div className="visual-quiz-meta">
+                <span>答对加分</span>
+                <span>不会就跳过</span>
+              </div>
             </div>
           </div>
         </div>
       </section>
 
-      <section className="home-board">
-        <div className="home-section-head">
+      <section className="landing-ranking">
+        <div className="landing-section-head">
           <div>
-            <p className="home-section-label">今日榜单</p>
-            <h2>现在谁排在前面</h2>
+            <p className="landing-section-label">今日排行榜</p>
+            <h2>今天谁冲得最快</h2>
           </div>
-          <Link href="/leaderboard" className="home-inline-link">
-            全部排名
+          <Link href="/leaderboard" className="landing-inline-link">
+            查看全部
           </Link>
         </div>
 
         {previewEntries.length === 0 ? (
-          <p className="home-empty">今天还没有成绩，去拿下第一个上榜位。</p>
+          <p className="landing-empty">今天还没有成绩，先来拿下第一个上榜位。</p>
         ) : (
-          <ol className="home-ranking-list">
+          <ol className="landing-ranking-list">
             {previewEntries.map((entry, index) => (
-              <li key={entry.id} className="home-ranking-item">
-                <span className="home-rank-number">#{index + 1}</span>
-                <div className="home-rank-main">
+              <li key={entry.id} className="landing-ranking-item">
+                <span className="landing-rank-index">#{index + 1}</span>
+                <div className="landing-ranking-main">
                   <strong>{entry.nickname}</strong>
                   <span>
                     {entry.correctCount}/{entry.answeredCount} · {formatPercent(entry.accuracy)}
                   </span>
                 </div>
-                <div className="home-rank-score">
+                <div className="landing-ranking-score">
                   <strong>{entry.score}</strong>
                   <span>{(entry.durationMs / 1000).toFixed(1)}s</span>
                 </div>
@@ -155,7 +164,7 @@ export default async function HomePage() {
         )}
       </section>
 
-      <footer className="home-footer">
+      <footer className="landing-footer">
         <p>一局结束，马上再来。</p>
       </footer>
     </div>
