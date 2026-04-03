@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { SubmitScoreForm } from "@/components/submit-score-form";
 
@@ -17,12 +17,14 @@ type SessionSummary = {
   serverNow: string;
 };
 
-type CurrentQuestion = {
+type QuestionCard = {
   id: string;
   imageUrl: string;
   difficulty: "EASY" | "MEDIUM" | "HARD";
   tags: string[];
-} | null;
+};
+
+type CurrentQuestion = QuestionCard | null;
 
 type FeedbackState = {
   acceptedAnswer: string;
@@ -31,8 +33,17 @@ type FeedbackState = {
   skipped: boolean;
 } | null;
 
-const MIN_FEEDBACK_MS = 160;
-const NEXT_QUESTION_DELAY_MS = 60;
+type TurnTask = {
+  path: "/api/game/answer" | "/api/game/skip";
+  body: Record<string, string | string[]>;
+  immediateNextQuestion: CurrentQuestion;
+  remainingQueue: QuestionCard[];
+  previousQuestion: CurrentQuestion;
+  previousAnswer: string;
+};
+
+const MIN_FEEDBACK_MS = 90;
+const NEXT_QUESTION_DELAY_MS = 20;
 
 const difficultyText = {
   EASY: "简单",
@@ -43,25 +54,52 @@ const difficultyText = {
 export function PlayClient() {
   const [session, setSession] = useState<SessionSummary | null>(null);
   const [question, setQuestion] = useState<CurrentQuestion>(null);
-  const [bufferedQuestion, setBufferedQuestion] = useState<CurrentQuestion>(null);
+  const [questionQueue, setQuestionQueue] = useState<QuestionCard[]>([]);
   const [displayedImageSrc, setDisplayedImageSrc] = useState<string | null>(null);
-  const [displayedImageQuestionId, setDisplayedImageQuestionId] = useState<string | null>(null);
+  const [displayedImageQuestionId, setDisplayedImageQuestionId] = useState<string | null>(
+    null,
+  );
   const [isQuestionImageReady, setIsQuestionImageReady] = useState(false);
   const [answer, setAnswer] = useState("");
   const [feedback, setFeedback] = useState<FeedbackState>(null);
   const [error, setError] = useState<string | null>(null);
   const [isBooting, setIsBooting] = useState(true);
   const [roundKey, setRoundKey] = useState(0);
-  const [isPending, startTransition] = useTransition();
+  const [pendingTurnCount, setPendingTurnCount] = useState(0);
   const finishTriggeredRef = useRef(false);
   const advanceTimerRef = useRef<number | null>(null);
+  const feedbackTimerRef = useRef<number | null>(null);
   const loadedImageCacheRef = useRef<Set<string>>(new Set());
   const inflightImageLoadsRef = useRef<Map<string, Promise<void>>>(new Map());
+  const processedQuestionIdsRef = useRef<Set<string>>(new Set());
+  const submissionQueueRef = useRef<Promise<void>>(Promise.resolve());
   const remainingMs = useCountdown(
     session?.expiresAt ?? null,
     session?.serverNow ?? null,
     session?.status ?? "ACTIVE",
   );
+
+  function clearAdvanceTimer() {
+    if (advanceTimerRef.current !== null) {
+      window.clearTimeout(advanceTimerRef.current);
+      advanceTimerRef.current = null;
+    }
+  }
+
+  function clearFeedbackTimer() {
+    if (feedbackTimerRef.current !== null) {
+      window.clearTimeout(feedbackTimerRef.current);
+      feedbackTimerRef.current = null;
+    }
+  }
+
+  function scheduleFeedbackReset() {
+    clearFeedbackTimer();
+    feedbackTimerRef.current = window.setTimeout(() => {
+      setFeedback(null);
+      feedbackTimerRef.current = null;
+    }, MIN_FEEDBACK_MS);
+  }
 
   function primeImage(src: string | null | undefined) {
     if (!src) {
@@ -109,9 +147,8 @@ export function PlayClient() {
 
   useEffect(() => {
     return () => {
-      if (advanceTimerRef.current !== null) {
-        window.clearTimeout(advanceTimerRef.current);
-      }
+      clearAdvanceTimer();
+      clearFeedbackTimer();
     };
   }, []);
 
@@ -153,12 +190,10 @@ export function PlayClient() {
   }, [question?.id, question?.imageUrl]);
 
   useEffect(() => {
-    if (!bufferedQuestion?.imageUrl) {
-      return;
-    }
-
-    void primeImage(bufferedQuestion.imageUrl);
-  }, [bufferedQuestion?.id, bufferedQuestion?.imageUrl]);
+    questionQueue.forEach((queuedQuestion) => {
+      void primeImage(queuedQuestion.imageUrl);
+    });
+  }, [questionQueue]);
 
   useEffect(() => {
     let cancelled = false;
@@ -169,12 +204,17 @@ export function PlayClient() {
       setFeedback(null);
       setAnswer("");
       setQuestion(null);
-      setBufferedQuestion(null);
+      setQuestionQueue([]);
       setSession(null);
       setDisplayedImageSrc(null);
       setDisplayedImageQuestionId(null);
       setIsQuestionImageReady(false);
+      setPendingTurnCount(0);
+      processedQuestionIdsRef.current.clear();
       finishTriggeredRef.current = false;
+      clearAdvanceTimer();
+      clearFeedbackTimer();
+      submissionQueueRef.current = Promise.resolve();
 
       const response = await fetch("/api/game/start", {
         method: "POST",
@@ -192,7 +232,7 @@ export function PlayClient() {
       if (!cancelled) {
         setSession(payload.session);
         setQuestion(payload.question);
-        setBufferedQuestion(payload.queuedQuestion ?? null);
+        setQuestionQueue(payload.queuedQuestions ?? []);
         setIsBooting(false);
       }
     }
@@ -213,7 +253,8 @@ export function PlayClient() {
     }
 
     finishTriggeredRef.current = true;
-    startTransition(async () => {
+
+    void (async () => {
       const response = await fetch("/api/game/finish", {
         method: "POST",
         headers: {
@@ -225,11 +266,12 @@ export function PlayClient() {
       if (response.ok) {
         setSession(payload.session);
         setQuestion(null);
+        setQuestionQueue([]);
       } else {
         setError(payload.error ?? "结束本局时出现问题。");
       }
-    });
-  }, [remainingMs, session, startTransition]);
+    })();
+  }, [remainingMs, session]);
 
   const summary = useMemo(() => {
     if (!session) {
@@ -246,23 +288,18 @@ export function PlayClient() {
 
   function queueNextQuestion(
     nextQuestion: CurrentQuestion,
-    queuedQuestion: CurrentQuestion,
+    remainingQueue: QuestionCard[],
   ) {
-    if (advanceTimerRef.current !== null) {
-      window.clearTimeout(advanceTimerRef.current);
-      advanceTimerRef.current = null;
-    }
-
-    setBufferedQuestion(queuedQuestion);
+    clearAdvanceTimer();
+    setQuestionQueue(remainingQueue);
 
     if (!nextQuestion) {
       advanceTimerRef.current = window.setTimeout(() => {
-        setFeedback(null);
         setQuestion(null);
-        setBufferedQuestion(null);
         setDisplayedImageSrc(null);
         setDisplayedImageQuestionId(null);
         setIsQuestionImageReady(false);
+        advanceTimerRef.current = null;
       }, MIN_FEEDBACK_MS);
       return;
     }
@@ -270,36 +307,71 @@ export function PlayClient() {
     void primeImage(nextQuestion.imageUrl);
 
     advanceTimerRef.current = window.setTimeout(() => {
-      setFeedback(null);
       setQuestion(nextQuestion);
+      advanceTimerRef.current = null;
     }, NEXT_QUESTION_DELAY_MS);
   }
 
-  async function resolveTurn(
-    path: "/api/game/answer" | "/api/game/skip",
-    body: Record<string, string>,
-  ) {
-    const response = await fetch(path, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
+  async function processTurn(task: TurnTask) {
+    try {
+      const response = await fetch(task.path, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(task.body),
+      });
 
-    const payload = await response.json();
-    if (!response.ok) {
-      setError(payload.error ?? "处理当前题目失败，请稍后再试。");
-      return;
+      const payload = await response.json();
+      if (!response.ok) {
+        setError(payload.error ?? "处理当前题目失败，请稍后再试。");
+
+        setQuestion((currentQuestion) => {
+          if (!currentQuestion) {
+            setQuestionQueue(
+              task.immediateNextQuestion
+                ? [task.immediateNextQuestion, ...task.remainingQueue]
+                : task.remainingQueue,
+            );
+            setAnswer(task.previousAnswer);
+            return task.previousQuestion;
+          }
+
+          return currentQuestion;
+        });
+        return;
+      }
+
+      setSession(payload.session);
+
+      if (payload.result) {
+        setFeedback(payload.result);
+        scheduleFeedbackReset();
+      }
+
+      if (payload.session.status !== "ACTIVE") {
+        queueNextQuestion(null, []);
+        return;
+      }
+
+      setQuestionQueue((currentQueue) =>
+        payload.queuedQuestion ? [...currentQueue, payload.queuedQuestion] : currentQueue,
+      );
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error ? requestError.message : "提交答案失败，请稍后再试。",
+      );
+    } finally {
+      setPendingTurnCount((count) => Math.max(0, count - 1));
     }
+  }
 
-    setSession(payload.session);
-    setFeedback(payload.result);
-    setAnswer("");
-    queueNextQuestion(
-      payload.session.status === "ACTIVE" ? payload.nextQuestion : null,
-      payload.session.status === "ACTIVE" ? payload.queuedQuestion ?? null : null,
-    );
+  function enqueueTurn(task: TurnTask) {
+    setPendingTurnCount((count) => count + 1);
+
+    submissionQueueRef.current = submissionQueueRef.current
+      .catch(() => undefined)
+      .then(() => processTurn(task));
   }
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -309,14 +381,37 @@ export function PlayClient() {
       return;
     }
 
+    if (processedQuestionIdsRef.current.has(question.id)) {
+      return;
+    }
+
+    processedQuestionIdsRef.current.add(question.id);
     setError(null);
 
-    startTransition(async () => {
-      await resolveTurn("/api/game/answer", {
+    const submittedAnswer = answer.trim();
+    const previousQuestion = question;
+    const immediateNextQuestion = questionQueue[0] ?? null;
+    const remainingQueue = questionQueue.slice(1);
+    const protectedQuestionIds = questionQueue.map((queuedQuestion) => queuedQuestion.id);
+
+    setAnswer("");
+
+    if (immediateNextQuestion) {
+      queueNextQuestion(immediateNextQuestion, remainingQueue);
+    }
+
+    enqueueTurn({
+      path: "/api/game/answer",
+      body: {
         sessionId: session.sessionId,
-        questionId: question.id,
-        answer,
-      });
+        questionId: previousQuestion.id,
+        answer: submittedAnswer,
+        protectedQuestionIds,
+      },
+      immediateNextQuestion,
+      remainingQueue,
+      previousQuestion,
+      previousAnswer: submittedAnswer,
     });
   }
 
@@ -325,13 +420,33 @@ export function PlayClient() {
       return;
     }
 
+    if (processedQuestionIdsRef.current.has(question.id)) {
+      return;
+    }
+
+    processedQuestionIdsRef.current.add(question.id);
     setError(null);
 
-    startTransition(async () => {
-      await resolveTurn("/api/game/skip", {
+    const previousQuestion = question;
+    const immediateNextQuestion = questionQueue[0] ?? null;
+    const remainingQueue = questionQueue.slice(1);
+    const protectedQuestionIds = questionQueue.map((queuedQuestion) => queuedQuestion.id);
+
+    if (immediateNextQuestion) {
+      queueNextQuestion(immediateNextQuestion, remainingQueue);
+    }
+
+    enqueueTurn({
+      path: "/api/game/skip",
+      body: {
         sessionId: session.sessionId,
-        questionId: question.id,
-      });
+        questionId: previousQuestion.id,
+        protectedQuestionIds,
+      },
+      immediateNextQuestion,
+      remainingQueue,
+      previousQuestion,
+      previousAnswer: "",
     });
   }
 
@@ -340,7 +455,7 @@ export function PlayClient() {
       <section className="panel">
         <span className="eyebrow">正在生成挑战</span>
         <h1 className="section-title">正在抽取第一张截图...</h1>
-        <p className="muted">如果题库为空，后台需要先录入或导入题目。</p>
+        <p className="muted">如果题库为空，需要先在后台录入或导入题目。</p>
       </section>
     );
   }
@@ -365,11 +480,10 @@ export function PlayClient() {
         <section className="panel">
           <span className="eyebrow">挑战结束</span>
           <h1 className="hero-title hero-title-compact">
-            本局已结束，看看你能不能冲上榜。
+            本局已经结束，看看你能不能冲上榜。
           </h1>
           <p className="hero-copy">
-            倒计时归零或题库抽完后会自动结算。你可以填写昵称提交成绩，也可以直接
-            再来一局。
+            倒计时归零或题库抽完后会自动结算。你可以填写昵称提交成绩，也可以直接再来一局。
           </p>
         </section>
         <SubmitScoreForm
@@ -394,9 +508,7 @@ export function PlayClient() {
               看图、输入作品名、继续下一题。
             </h1>
           </div>
-          <div className="countdown">
-            剩余 {Math.ceil((remainingMs ?? 0) / 1000)} 秒
-          </div>
+          <div className="countdown">剩余 {Math.ceil((remainingMs ?? 0) / 1000)} 秒</div>
         </div>
 
         {question ? (
@@ -426,7 +538,7 @@ export function PlayClient() {
             </div>
           </>
         ) : (
-          <div className="empty-state">正在切换到下一题...</div>
+          <div className="empty-state">正在切到下一题...</div>
         )}
 
         {feedback ? (
@@ -460,32 +572,31 @@ export function PlayClient() {
               placeholder="例如: 海贼王"
               value={answer}
               onChange={(event) => setAnswer(event.target.value)}
-              disabled={!question || isPending}
+              disabled={!question}
             />
           </div>
           <div className="toolbar">
-            <button
-              type="submit"
-              className="button"
-              disabled={!question || isPending || !answer.trim()}
-            >
-              {isPending ? "判题中..." : "提交答案"}
+            <button type="submit" className="button" disabled={!question || !answer.trim()}>
+              提交答案
             </button>
             <button
               type="button"
               className="button-ghost"
-              disabled={!question || isPending}
+              disabled={!question}
               onClick={handleSkip}
             >
-              {isPending ? "处理中..." : "跳过本题"}
+              跳过本题
             </button>
           </div>
+          {pendingTurnCount > 0 ? (
+            <p className="muted">后台正在同步 {pendingTurnCount} 道题的判定结果...</p>
+          ) : null}
         </form>
       </section>
 
       <aside className="stack">
         <section className="panel stack">
-          <span className="eyebrow">当前战绩</span>
+          <span className="eyebrow">当前成绩</span>
           <div className="stat-grid stat-grid-play" style={{ marginTop: 0 }}>
             <div className="score-card">
               <span className="muted">总分</span>

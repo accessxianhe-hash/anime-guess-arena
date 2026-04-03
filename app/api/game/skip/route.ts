@@ -20,6 +20,7 @@ export async function POST(request: NextRequest) {
     const payload = await skipQuestion(
       parsed.data.sessionId,
       parsed.data.questionId,
+      parsed.data.protectedQuestionIds,
     );
 
     return NextResponse.json(payload);

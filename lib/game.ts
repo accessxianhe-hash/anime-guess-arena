@@ -126,57 +126,36 @@ async function getAvailableQuestions(
   });
 }
 
-async function finalizeSessionAfterTurn(
-  client: GameClient,
-  session: GameSessionRecord,
-  nextQuestion: QuestionPayload | null,
-) {
-  if (session.status !== GameSessionStatus.ACTIVE) {
-    return session;
-  }
-
-  const expired = Date.now() >= session.expiresAt.getTime();
-  if (!nextQuestion || expired) {
-    return client.gameSession.update({
-      where: { id: session.id },
-      data: {
-        status: expired
-          ? GameSessionStatus.EXPIRED
-          : GameSessionStatus.COMPLETED,
-        finishedAt: new Date(),
-      },
-    });
-  }
-
-  return session;
-}
-
-async function expireSessionIfNeeded(
+async function getQueuedQuestionReplacement(
   client: GameClient,
   sessionId: string,
+  protectedQuestionIds: string[],
 ) {
-  const session = await client.gameSession.findUnique({
-    where: { id: sessionId },
+  const [replacement] = await client.question.findMany({
+    where: {
+      active: true,
+      id: {
+        notIn: protectedQuestionIds,
+      },
+      attempts: {
+        none: {
+          sessionId,
+        },
+      },
+    },
+    orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+    take: 1,
+    select: {
+      id: true,
+      canonicalTitle: true,
+      imageUrl: true,
+      imageStorageKey: true,
+      difficulty: true,
+      tags: true,
+    },
   });
 
-  if (!session) {
-    throw new Error("答题会话不存在。");
-  }
-
-  if (
-    session.status === GameSessionStatus.ACTIVE &&
-    Date.now() >= session.expiresAt.getTime()
-  ) {
-    return client.gameSession.update({
-      where: { id: sessionId },
-      data: {
-        status: GameSessionStatus.EXPIRED,
-        finishedAt: new Date(),
-      },
-    });
-  }
-
-  return session;
+  return replacement ?? null;
 }
 
 export async function startGameSession() {
@@ -187,11 +166,12 @@ export async function startGameSession() {
     },
   });
 
-  const [question, queuedQuestion] = await getAvailableQuestions(
+  const [question, ...queuedQuestions] = await getAvailableQuestions(
     prisma,
     session.id,
-    2,
+    7,
   );
+
   if (!question) {
     throw new Error("未能抽取题目，请稍后再试。");
   }
@@ -199,7 +179,7 @@ export async function startGameSession() {
   return {
     session: buildSummary(session),
     question: mapQuestion(question),
-    queuedQuestion: queuedQuestion ? mapQuestion(queuedQuestion) : null,
+    queuedQuestions: queuedQuestions.map(mapQuestion),
   };
 }
 
@@ -208,24 +188,51 @@ async function resolveQuestionTurn(
   questionId: string,
   submittedAnswer: string,
   skipped: boolean,
+  protectedQuestionIds: string[],
 ) {
-  const session = await expireSessionIfNeeded(prisma, sessionId);
+  const [existingSession, question] = await prisma.$transaction([
+    prisma.gameSession.findUnique({
+      where: { id: sessionId },
+    }),
+    prisma.question.findUnique({
+      where: {
+        id: questionId,
+      },
+      include: {
+        aliases: {
+          select: {
+            normalizedAlias: true,
+          },
+        },
+      },
+    }),
+  ]);
+
+  if (!existingSession) {
+    throw new Error("答题会话不存在。");
+  }
+
+  const now = Date.now();
+  const expired = now >= existingSession.expiresAt.getTime();
+  const session =
+    existingSession.status === GameSessionStatus.ACTIVE && expired
+      ? await prisma.gameSession.update({
+          where: { id: sessionId },
+          data: {
+            status: GameSessionStatus.EXPIRED,
+            finishedAt: new Date(),
+          },
+        })
+      : existingSession;
+
   if (session.status !== GameSessionStatus.ACTIVE) {
     return {
       session: buildSummary(session),
       result: null,
       nextQuestion: null,
+      queuedQuestion: null,
     };
   }
-
-  const question = await prisma.question.findUnique({
-    where: {
-      id: questionId,
-    },
-    include: {
-      aliases: true,
-    },
-  });
 
   if (!question || !question.active) {
     throw new Error("题目不存在或已下架。");
@@ -241,18 +248,69 @@ async function resolveQuestionTurn(
         (alias) => alias.normalizedAlias === normalizedSubmittedAnswer,
       ));
   const scoreAwarded = isCorrect ? calculateQuestionScore(question.difficulty) : 0;
+  const reservedQuestionIds = Array.from(
+    new Set([questionId, ...protectedQuestionIds]),
+  );
 
   try {
-    await prisma.answerAttempt.create({
-      data: {
-        sessionId,
-        questionId,
-        submittedAnswer,
-        normalizedSubmittedAnswer,
-        isCorrect,
-        scoreAwarded,
-      },
-    });
+    const [[, nextSession], queuedReplacement] = await Promise.all([
+      prisma.$transaction([
+        prisma.answerAttempt.create({
+          data: {
+            sessionId,
+            questionId,
+            submittedAnswer,
+            normalizedSubmittedAnswer,
+            isCorrect,
+            scoreAwarded,
+          },
+        }),
+        prisma.gameSession.update({
+          where: { id: sessionId },
+          data: {
+            score: { increment: scoreAwarded },
+            correctCount: { increment: isCorrect ? 1 : 0 },
+            answeredCount: { increment: skipped ? 0 : 1 },
+          },
+        }),
+      ]),
+      session.status === GameSessionStatus.ACTIVE
+        ? getQueuedQuestionReplacement(prisma, sessionId, reservedQuestionIds)
+        : Promise.resolve(null),
+    ]);
+
+    let updatedSession = nextSession;
+
+    if (
+      updatedSession.status === GameSessionStatus.ACTIVE &&
+      protectedQuestionIds.length === 0 &&
+      !queuedReplacement
+    ) {
+      updatedSession = await prisma.gameSession.update({
+        where: { id: sessionId },
+        data: {
+          status: GameSessionStatus.COMPLETED,
+          finishedAt: new Date(),
+        },
+      });
+    }
+
+    const result: AnswerResult = {
+      acceptedAnswer: question.canonicalTitle,
+      isCorrect,
+      scoreAwarded,
+      skipped,
+    };
+
+    return {
+      session: buildSummary(updatedSession),
+      result,
+      nextQuestion: null,
+      queuedQuestion:
+        updatedSession.status === GameSessionStatus.ACTIVE && queuedReplacement
+          ? mapQuestion(queuedReplacement)
+          : null,
+    };
   } catch (error) {
     if (
       error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -287,89 +345,62 @@ async function resolveQuestionTurn(
         throw new Error("答题会话不存在。");
       }
 
-      const [nextQuestion, queuedQuestion] = await getAvailableQuestions(
-        prisma,
-        sessionId,
-        2,
-      );
-      const finalizedSession = await finalizeSessionAfterTurn(
-        prisma,
-        currentSession,
-        nextQuestion,
-      );
+      const queuedReplacement =
+        currentSession.status === GameSessionStatus.ACTIVE
+          ? await getQueuedQuestionReplacement(
+              prisma,
+              sessionId,
+              reservedQuestionIds,
+            )
+          : null;
 
       return {
-        session: buildSummary(finalizedSession),
+        session: buildSummary(currentSession),
         result: {
           acceptedAnswer: existingAttempt.question.canonicalTitle,
           isCorrect: existingAttempt.isCorrect,
           scoreAwarded: existingAttempt.scoreAwarded,
           skipped: wasSkippedAttempt(existingAttempt),
         },
-        nextQuestion:
-          finalizedSession.status === GameSessionStatus.ACTIVE && nextQuestion
-            ? mapQuestion(nextQuestion)
-            : null,
+        nextQuestion: null,
         queuedQuestion:
-          finalizedSession.status === GameSessionStatus.ACTIVE && queuedQuestion
-            ? mapQuestion(queuedQuestion)
+          currentSession.status === GameSessionStatus.ACTIVE && queuedReplacement
+            ? mapQuestion(queuedReplacement)
             : null,
       };
     }
 
     throw error;
   }
-
-  const [updatedSession, upcomingQuestions] = await Promise.all([
-    prisma.gameSession.update({
-      where: { id: sessionId },
-      data: {
-        score: { increment: scoreAwarded },
-        correctCount: { increment: isCorrect ? 1 : 0 },
-        answeredCount: { increment: skipped ? 0 : 1 },
-      },
-    }),
-    getAvailableQuestions(prisma, sessionId, 2),
-  ]);
-  const [nextQuestion, queuedQuestion] = upcomingQuestions;
-
-  const finalizedSession = await finalizeSessionAfterTurn(
-    prisma,
-    updatedSession,
-    nextQuestion,
-  );
-
-  const result: AnswerResult = {
-    acceptedAnswer: question.canonicalTitle,
-    isCorrect,
-    scoreAwarded,
-    skipped,
-  };
-
-  return {
-    session: buildSummary(finalizedSession),
-    result,
-    nextQuestion:
-      finalizedSession.status === GameSessionStatus.ACTIVE && nextQuestion
-        ? mapQuestion(nextQuestion)
-        : null,
-    queuedQuestion:
-      finalizedSession.status === GameSessionStatus.ACTIVE && queuedQuestion
-        ? mapQuestion(queuedQuestion)
-        : null,
-  };
 }
 
 export async function submitAnswer(
   sessionId: string,
   questionId: string,
   answer: string,
+  protectedQuestionIds: string[],
 ) {
-  return resolveQuestionTurn(sessionId, questionId, answer, false);
+  return resolveQuestionTurn(
+    sessionId,
+    questionId,
+    answer,
+    false,
+    protectedQuestionIds,
+  );
 }
 
-export async function skipQuestion(sessionId: string, questionId: string) {
-  return resolveQuestionTurn(sessionId, questionId, "", true);
+export async function skipQuestion(
+  sessionId: string,
+  questionId: string,
+  protectedQuestionIds: string[],
+) {
+  return resolveQuestionTurn(
+    sessionId,
+    questionId,
+    "",
+    true,
+    protectedQuestionIds,
+  );
 }
 
 export async function finishGameSession(sessionId: string) {

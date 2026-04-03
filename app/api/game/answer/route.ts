@@ -21,6 +21,7 @@ export async function POST(request: NextRequest) {
       parsed.data.sessionId,
       parsed.data.questionId,
       parsed.data.answer,
+      parsed.data.protectedQuestionIds,
     );
 
     return NextResponse.json(payload);
@@ -33,4 +34,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-
