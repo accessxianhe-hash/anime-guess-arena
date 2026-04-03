@@ -11,13 +11,13 @@ export const answerQuestionSchema = z.object({
   sessionId: z.string().min(1),
   questionId: z.string().min(1),
   answer: z.string().trim().min(1).max(120),
-  protectedQuestionIds: z.array(z.string().min(1)).max(8).optional().default([]),
+  protectedQuestionIds: z.array(z.string().min(1)).max(12).optional().default([]),
 });
 
 export const skipQuestionSchema = z.object({
   sessionId: z.string().min(1),
   questionId: z.string().min(1),
-  protectedQuestionIds: z.array(z.string().min(1)).max(8).optional().default([]),
+  protectedQuestionIds: z.array(z.string().min(1)).max(12).optional().default([]),
 });
 
 export const finishGameSchema = z.object({

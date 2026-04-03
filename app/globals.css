@@ -470,6 +470,20 @@ code {
   background: #060a13;
 }
 
+.play-preload-strip {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.play-preload-strip img {
+  width: 1px;
+  height: 1px;
+}
+
 .play-image-loading {
   background:
     linear-gradient(135deg, rgba(97, 117, 177, 0.26), rgba(12, 17, 31, 0.92)),

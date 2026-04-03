@@ -43,7 +43,7 @@ type TurnTask = {
 };
 
 const MIN_FEEDBACK_MS = 90;
-const NEXT_QUESTION_DELAY_MS = 20;
+const NEXT_QUESTION_DELAY_MS = 0;
 
 const difficultyText = {
   EASY: "简单",
@@ -292,13 +292,13 @@ export function PlayClient() {
   ) {
     clearAdvanceTimer();
     setQuestionQueue(remainingQueue);
+    setDisplayedImageSrc(null);
+    setDisplayedImageQuestionId(null);
+    setIsQuestionImageReady(false);
 
     if (!nextQuestion) {
       advanceTimerRef.current = window.setTimeout(() => {
         setQuestion(null);
-        setDisplayedImageSrc(null);
-        setDisplayedImageQuestionId(null);
-        setIsQuestionImageReady(false);
         advanceTimerRef.current = null;
       }, MIN_FEEDBACK_MS);
       return;
@@ -352,6 +352,10 @@ export function PlayClient() {
       if (payload.session.status !== "ACTIVE") {
         queueNextQuestion(null, []);
         return;
+      }
+
+      if (payload.queuedQuestion?.imageUrl) {
+        void primeImage(payload.queuedQuestion.imageUrl);
       }
 
       setQuestionQueue((currentQueue) =>
@@ -513,6 +517,18 @@ export function PlayClient() {
 
         {question ? (
           <>
+            <div className="play-preload-strip" aria-hidden="true">
+              {questionQueue.slice(0, 6).map((queuedQuestion, index) => (
+                <img
+                  key={`preload-${queuedQuestion.id}`}
+                  src={queuedQuestion.imageUrl}
+                  alt=""
+                  loading="eager"
+                  decoding="async"
+                  fetchPriority={index === 0 ? "high" : "low"}
+                />
+              ))}
+            </div>
             <div className={`play-image ${!isQuestionImageReady ? "play-image-loading" : ""}`}>
               {displayedImageSrc && displayedImageQuestionId === question.id ? (
                 <img

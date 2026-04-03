@@ -169,7 +169,7 @@ export async function startGameSession() {
   const [question, ...queuedQuestions] = await getAvailableQuestions(
     prisma,
     session.id,
-    7,
+    10,
   );
 
   if (!question) {
