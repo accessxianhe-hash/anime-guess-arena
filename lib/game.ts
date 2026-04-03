@@ -63,6 +63,20 @@ type GameSessionRecord = {
   finishedAt: Date | null;
 };
 
+function shuffleQuestions<T>(items: T[]) {
+  const shuffled = [...items];
+
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[swapIndex]] = [
+      shuffled[swapIndex],
+      shuffled[index],
+    ];
+  }
+
+  return shuffled;
+}
+
 function mapQuestion(question: QuestionPayload) {
   return {
     id: question.id,
@@ -102,9 +116,8 @@ function wasSkippedAttempt(attempt: {
 async function getAvailableQuestions(
   client: GameClient,
   sessionId: string,
-  take: number,
 ) {
-  return client.question.findMany({
+  const candidates = await client.question.findMany({
     where: {
       active: true,
       attempts: {
@@ -113,38 +126,6 @@ async function getAvailableQuestions(
         },
       },
     },
-    orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
-    take,
-    select: {
-      id: true,
-      canonicalTitle: true,
-      imageUrl: true,
-      imageStorageKey: true,
-      difficulty: true,
-      tags: true,
-    },
-  });
-}
-
-async function getQueuedQuestionReplacement(
-  client: GameClient,
-  sessionId: string,
-  protectedQuestionIds: string[],
-) {
-  const [replacement] = await client.question.findMany({
-    where: {
-      active: true,
-      id: {
-        notIn: protectedQuestionIds,
-      },
-      attempts: {
-        none: {
-          sessionId,
-        },
-      },
-    },
-    orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
-    take: 1,
     select: {
       id: true,
       canonicalTitle: true,
@@ -155,7 +136,7 @@ async function getQueuedQuestionReplacement(
     },
   });
 
-  return replacement ?? null;
+  return shuffleQuestions(candidates);
 }
 
 export async function startGameSession() {
@@ -166,11 +147,7 @@ export async function startGameSession() {
     },
   });
 
-  const [question, ...queuedQuestions] = await getAvailableQuestions(
-    prisma,
-    session.id,
-    10,
-  );
+  const [question, ...queuedQuestions] = await getAvailableQuestions(prisma, session.id);
 
   if (!question) {
     throw new Error("未能抽取题目，请稍后再试。");
@@ -253,38 +230,32 @@ async function resolveQuestionTurn(
   );
 
   try {
-    const [[, nextSession], queuedReplacement] = await Promise.all([
-      prisma.$transaction([
-        prisma.answerAttempt.create({
-          data: {
-            sessionId,
-            questionId,
-            submittedAnswer,
-            normalizedSubmittedAnswer,
-            isCorrect,
-            scoreAwarded,
-          },
-        }),
-        prisma.gameSession.update({
-          where: { id: sessionId },
-          data: {
-            score: { increment: scoreAwarded },
-            correctCount: { increment: isCorrect ? 1 : 0 },
-            answeredCount: { increment: skipped ? 0 : 1 },
-          },
-        }),
-      ]),
-      session.status === GameSessionStatus.ACTIVE
-        ? getQueuedQuestionReplacement(prisma, sessionId, reservedQuestionIds)
-        : Promise.resolve(null),
+    const [, nextSession] = await prisma.$transaction([
+      prisma.answerAttempt.create({
+        data: {
+          sessionId,
+          questionId,
+          submittedAnswer,
+          normalizedSubmittedAnswer,
+          isCorrect,
+          scoreAwarded,
+        },
+      }),
+      prisma.gameSession.update({
+        where: { id: sessionId },
+        data: {
+          score: { increment: scoreAwarded },
+          correctCount: { increment: isCorrect ? 1 : 0 },
+          answeredCount: { increment: skipped ? 0 : 1 },
+        },
+      }),
     ]);
 
     let updatedSession = nextSession;
 
     if (
       updatedSession.status === GameSessionStatus.ACTIVE &&
-      protectedQuestionIds.length === 0 &&
-      !queuedReplacement
+      reservedQuestionIds.length === 1
     ) {
       updatedSession = await prisma.gameSession.update({
         where: { id: sessionId },
@@ -306,10 +277,7 @@ async function resolveQuestionTurn(
       session: buildSummary(updatedSession),
       result,
       nextQuestion: null,
-      queuedQuestion:
-        updatedSession.status === GameSessionStatus.ACTIVE && queuedReplacement
-          ? mapQuestion(queuedReplacement)
-          : null,
+      queuedQuestion: null,
     };
   } catch (error) {
     if (
@@ -345,15 +313,6 @@ async function resolveQuestionTurn(
         throw new Error("答题会话不存在。");
       }
 
-      const queuedReplacement =
-        currentSession.status === GameSessionStatus.ACTIVE
-          ? await getQueuedQuestionReplacement(
-              prisma,
-              sessionId,
-              reservedQuestionIds,
-            )
-          : null;
-
       return {
         session: buildSummary(currentSession),
         result: {
@@ -363,10 +322,7 @@ async function resolveQuestionTurn(
           skipped: wasSkippedAttempt(existingAttempt),
         },
         nextQuestion: null,
-        queuedQuestion:
-          currentSession.status === GameSessionStatus.ACTIVE && queuedReplacement
-            ? mapQuestion(queuedReplacement)
-            : null,
+        queuedQuestion: null,
       };
     }
 
