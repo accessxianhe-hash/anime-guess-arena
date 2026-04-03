@@ -43,7 +43,9 @@ const difficultyText = {
 export function PlayClient() {
   const [session, setSession] = useState<SessionSummary | null>(null);
   const [question, setQuestion] = useState<CurrentQuestion>(null);
+  const [bufferedQuestion, setBufferedQuestion] = useState<CurrentQuestion>(null);
   const [displayedImageSrc, setDisplayedImageSrc] = useState<string | null>(null);
+  const [displayedImageQuestionId, setDisplayedImageQuestionId] = useState<string | null>(null);
   const [isQuestionImageReady, setIsQuestionImageReady] = useState(false);
   const [answer, setAnswer] = useState("");
   const [feedback, setFeedback] = useState<FeedbackState>(null);
@@ -116,6 +118,7 @@ export function PlayClient() {
   useEffect(() => {
     if (!question?.imageUrl) {
       setDisplayedImageSrc(null);
+      setDisplayedImageQuestionId(null);
       setIsQuestionImageReady(false);
       return;
     }
@@ -125,11 +128,13 @@ export function PlayClient() {
 
     if (loadedImageCacheRef.current.has(nextImageSrc)) {
       setDisplayedImageSrc(nextImageSrc);
+      setDisplayedImageQuestionId(question.id);
       setIsQuestionImageReady(true);
       return;
     }
 
     setDisplayedImageSrc(null);
+    setDisplayedImageQuestionId(null);
     setIsQuestionImageReady(false);
 
     void primeImage(nextImageSrc).then(() => {
@@ -138,6 +143,7 @@ export function PlayClient() {
       }
 
       setDisplayedImageSrc(nextImageSrc);
+      setDisplayedImageQuestionId(question.id);
       setIsQuestionImageReady(true);
     });
 
@@ -145,6 +151,14 @@ export function PlayClient() {
       cancelled = true;
     };
   }, [question?.id, question?.imageUrl]);
+
+  useEffect(() => {
+    if (!bufferedQuestion?.imageUrl) {
+      return;
+    }
+
+    void primeImage(bufferedQuestion.imageUrl);
+  }, [bufferedQuestion?.id, bufferedQuestion?.imageUrl]);
 
   useEffect(() => {
     let cancelled = false;
@@ -155,7 +169,11 @@ export function PlayClient() {
       setFeedback(null);
       setAnswer("");
       setQuestion(null);
+      setBufferedQuestion(null);
       setSession(null);
+      setDisplayedImageSrc(null);
+      setDisplayedImageQuestionId(null);
+      setIsQuestionImageReady(false);
       finishTriggeredRef.current = false;
 
       const response = await fetch("/api/game/start", {
@@ -174,6 +192,7 @@ export function PlayClient() {
       if (!cancelled) {
         setSession(payload.session);
         setQuestion(payload.question);
+        setBufferedQuestion(payload.queuedQuestion ?? null);
         setIsBooting(false);
       }
     }
@@ -225,16 +244,25 @@ export function PlayClient() {
     };
   }, [session]);
 
-  function queueNextQuestion(nextQuestion: CurrentQuestion) {
+  function queueNextQuestion(
+    nextQuestion: CurrentQuestion,
+    queuedQuestion: CurrentQuestion,
+  ) {
     if (advanceTimerRef.current !== null) {
       window.clearTimeout(advanceTimerRef.current);
       advanceTimerRef.current = null;
     }
 
+    setBufferedQuestion(queuedQuestion);
+
     if (!nextQuestion) {
       advanceTimerRef.current = window.setTimeout(() => {
         setFeedback(null);
         setQuestion(null);
+        setBufferedQuestion(null);
+        setDisplayedImageSrc(null);
+        setDisplayedImageQuestionId(null);
+        setIsQuestionImageReady(false);
       }, MIN_FEEDBACK_MS);
       return;
     }
@@ -270,6 +298,7 @@ export function PlayClient() {
     setAnswer("");
     queueNextQuestion(
       payload.session.status === "ACTIVE" ? payload.nextQuestion : null,
+      payload.session.status === "ACTIVE" ? payload.queuedQuestion ?? null : null,
     );
   }
 
@@ -373,7 +402,7 @@ export function PlayClient() {
         {question ? (
           <>
             <div className={`play-image ${!isQuestionImageReady ? "play-image-loading" : ""}`}>
-              {displayedImageSrc ? (
+              {displayedImageSrc && displayedImageQuestionId === question.id ? (
                 <img
                   key={`${question.id}-${displayedImageSrc}`}
                   src={displayedImageSrc}

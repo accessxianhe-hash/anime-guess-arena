@@ -99,11 +99,12 @@ function wasSkippedAttempt(attempt: {
   );
 }
 
-async function getAvailableQuestion(
+async function getAvailableQuestions(
   client: GameClient,
   sessionId: string,
+  take: number,
 ) {
-  return client.question.findFirst({
+  return client.question.findMany({
     where: {
       active: true,
       attempts: {
@@ -113,6 +114,7 @@ async function getAvailableQuestion(
       },
     },
     orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+    take,
     select: {
       id: true,
       canonicalTitle: true,
@@ -185,7 +187,11 @@ export async function startGameSession() {
     },
   });
 
-  const question = await getAvailableQuestion(prisma, session.id);
+  const [question, queuedQuestion] = await getAvailableQuestions(
+    prisma,
+    session.id,
+    2,
+  );
   if (!question) {
     throw new Error("未能抽取题目，请稍后再试。");
   }
@@ -193,6 +199,7 @@ export async function startGameSession() {
   return {
     session: buildSummary(session),
     question: mapQuestion(question),
+    queuedQuestion: queuedQuestion ? mapQuestion(queuedQuestion) : null,
   };
 }
 
@@ -280,7 +287,11 @@ async function resolveQuestionTurn(
         throw new Error("答题会话不存在。");
       }
 
-      const nextQuestion = await getAvailableQuestion(prisma, sessionId);
+      const [nextQuestion, queuedQuestion] = await getAvailableQuestions(
+        prisma,
+        sessionId,
+        2,
+      );
       const finalizedSession = await finalizeSessionAfterTurn(
         prisma,
         currentSession,
@@ -299,13 +310,17 @@ async function resolveQuestionTurn(
           finalizedSession.status === GameSessionStatus.ACTIVE && nextQuestion
             ? mapQuestion(nextQuestion)
             : null,
+        queuedQuestion:
+          finalizedSession.status === GameSessionStatus.ACTIVE && queuedQuestion
+            ? mapQuestion(queuedQuestion)
+            : null,
       };
     }
 
     throw error;
   }
 
-  const [updatedSession, nextQuestion] = await Promise.all([
+  const [updatedSession, upcomingQuestions] = await Promise.all([
     prisma.gameSession.update({
       where: { id: sessionId },
       data: {
@@ -314,8 +329,9 @@ async function resolveQuestionTurn(
         answeredCount: { increment: skipped ? 0 : 1 },
       },
     }),
-    getAvailableQuestion(prisma, sessionId),
+    getAvailableQuestions(prisma, sessionId, 2),
   ]);
+  const [nextQuestion, queuedQuestion] = upcomingQuestions;
 
   const finalizedSession = await finalizeSessionAfterTurn(
     prisma,
@@ -336,6 +352,10 @@ async function resolveQuestionTurn(
     nextQuestion:
       finalizedSession.status === GameSessionStatus.ACTIVE && nextQuestion
         ? mapQuestion(nextQuestion)
+        : null,
+    queuedQuestion:
+      finalizedSession.status === GameSessionStatus.ACTIVE && queuedQuestion
+        ? mapQuestion(queuedQuestion)
         : null,
   };
 }
