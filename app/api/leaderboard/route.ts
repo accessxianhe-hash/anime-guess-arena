@@ -1,16 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { getLeaderboard } from "@/lib/leaderboard";
-import { leaderboardScopeSchema } from "@/lib/validators";
+import { leaderboardModeSchema, leaderboardScopeSchema } from "@/lib/validators";
 
 export async function GET(request: NextRequest) {
   try {
     const scope = leaderboardScopeSchema.parse(
       request.nextUrl.searchParams.get("scope") ?? "daily",
     );
-    const entries = await getLeaderboard(scope);
+    const mode = leaderboardModeSchema.parse(
+      request.nextUrl.searchParams.get("mode") ?? "classic",
+    );
+    const entries = await getLeaderboard(scope, mode);
 
-    return NextResponse.json({ scope, entries });
+    return NextResponse.json({ scope, mode, entries });
   } catch (error) {
     return NextResponse.json(
       {
@@ -20,4 +23,3 @@ export async function GET(request: NextRequest) {
     );
   }
 }
-

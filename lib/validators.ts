@@ -4,8 +4,22 @@ import { z } from "zod";
 import { NICKNAME_MAX_LENGTH } from "@/lib/constants";
 
 const nicknameRegex = /^[\p{Script=Han}\p{Letter}\p{Number}_-]{2,20}$/u;
+export const gameModeSchema = z.enum(["classic", "yearly"]).default("classic");
 
-export const startGameSchema = z.object({});
+export const startGameSchema = z
+  .object({
+    mode: gameModeSchema.optional().default("classic"),
+    years: z.array(z.number().int().min(1900).max(2100)).optional().default([]),
+  })
+  .superRefine((value, ctx) => {
+    if (value.mode === "yearly" && value.years.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "年份模式至少选择一个年份。",
+        path: ["years"],
+      });
+    }
+  });
 
 export const answerQuestionSchema = z.object({
   sessionId: z.string().min(1),
@@ -35,6 +49,7 @@ export const submitLeaderboardSchema = z.object({
 });
 
 export const leaderboardScopeSchema = z.enum(["daily", "all_time"]).default("daily");
+export const leaderboardModeSchema = gameModeSchema.default("classic");
 
 export const questionFormSchema = z.object({
   canonicalTitle: z.string().trim().min(1).max(120),

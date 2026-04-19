@@ -38,11 +38,23 @@ Required in hosted environments:
 - `S3_ACCESS_KEY_ID`
 - `S3_SECRET_ACCESS_KEY`
 - `S3_KEY_PREFIX`
+- `S3_FORCE_PATH_STYLE`
 
 At least one of the following should be available for image URLs:
 
 - `S3_PUBLIC_BASE_URL`
 - `S3_ENDPOINT`
+
+Provider notes:
+
+- Cloudflare R2:
+  - `S3_REGION=auto`
+  - `S3_FORCE_PATH_STYLE=true`
+- Tencent Cloud COS:
+  - `S3_REGION` uses the COS region such as `ap-guangzhou`
+  - `S3_ENDPOINT` should use the COS S3 endpoint such as `https://cos.ap-guangzhou.myqcloud.com`
+  - `S3_BUCKET` should use the full bucket name with appid suffix, such as `anime-guess-arena-prod-1250000000`
+  - `S3_FORCE_PATH_STYLE=false`
 
 Auth URL guidance:
 

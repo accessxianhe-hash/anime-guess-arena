@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { getQuestionsForAdmin } from "@/lib/admin";
 import { AdminQuestionManager } from "@/components/admin-question-manager";
+import { buildQuestionImageSrc } from "@/lib/question-images";
 import { getStorageConfigStatus } from "@/lib/runtime-config";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +19,7 @@ export default async function AdminQuestionsPage() {
   const questions = questionRecords.map((question) => ({
     id: question.id,
     canonicalTitle: question.canonicalTitle,
-    imageUrl: question.imageUrl,
+    imageUrl: buildQuestionImageSrc(question.imageStorageKey, question.imageUrl),
     difficulty: question.difficulty,
     tags: question.tags,
     active: question.active,

@@ -3,14 +3,14 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { HOME_PREVIEW_LIMIT } from "@/lib/constants";
 import { getLeaderboard } from "@/lib/leaderboard";
-import { downloadQuestionImage } from "@/lib/storage";
+import { buildQuestionImageSrc } from "@/lib/question-images";
 import { formatPercent } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
 async function getPreviewEntries() {
   try {
-    return await getLeaderboard("daily", HOME_PREVIEW_LIMIT);
+    return await getLeaderboard("daily", "classic", HOME_PREVIEW_LIMIT);
   } catch {
     return [];
   }
@@ -64,27 +64,10 @@ function normalizeHeroQuestion(record: HeroQuestionRecord | null): HeroQuestion 
 
   return {
     answer,
-    imageUrl: imageUrl || imageStorageKey,
+    imageUrl: buildQuestionImageSrc(imageStorageKey, imageUrl),
     difficulty: record.difficulty?.trim() || "MEDIUM",
     tags: Array.isArray(record.tags) ? record.tags.filter(Boolean) : [],
   };
-}
-
-async function resolveHeroImageSource(question: HeroQuestionRecord | null) {
-  const imageStorageKey = question?.imageStorageKey?.trim();
-  const imageUrl = question?.imageUrl?.trim();
-
-  if (imageStorageKey) {
-    try {
-      const image = await downloadQuestionImage(imageStorageKey);
-      const base64 = Buffer.from(image.body).toString("base64");
-      return `data:${image.contentType};base64,${base64}`;
-    } catch {
-      // Fall back to public URL when storage fetch fails.
-    }
-  }
-
-  return imageUrl || "";
 }
 
 async function getRandomHeroQuestion() {
@@ -121,15 +104,7 @@ async function getRandomHeroQuestion() {
       return null;
     }
 
-    const resolvedImageUrl = await resolveHeroImageSource(question);
-    if (!resolvedImageUrl) {
-      return null;
-    }
-
-    return {
-      ...normalized,
-      imageUrl: resolvedImageUrl,
-    };
+    return normalized;
   } catch {
     return null;
   }

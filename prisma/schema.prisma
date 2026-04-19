@@ -19,9 +19,29 @@ enum GameSessionStatus {
   EXPIRED
 }
 
+enum GameMode {
+  CLASSIC
+  YEARLY
+}
+
 enum LeaderboardScope {
   DAILY
   ALL_TIME
+}
+
+enum YearlyImportJobStatus {
+  PENDING
+  RUNNING
+  PAUSED
+  FAILED
+  COMPLETED
+}
+
+enum YearlyImportItemStatus {
+  PENDING
+  IMPORTED
+  SKIPPED
+  FAILED
 }
 
 model AdminUser {
@@ -63,7 +83,10 @@ model QuestionAlias {
 
 model GameSession {
   id               String             @id @default(cuid())
+  mode             GameMode           @default(CLASSIC)
   status           GameSessionStatus  @default(ACTIVE)
+  selectedYears    Int[]
+  lastServedYear   Int?
   score            Int                @default(0)
   correctCount     Int                @default(0)
   answeredCount    Int                @default(0)
@@ -80,22 +103,31 @@ model GameSession {
 model AnswerAttempt {
   id                       String      @id @default(cuid())
   sessionId                String
-  questionId               String
+  mode                     GameMode    @default(CLASSIC)
+  turnKey                  String
+  questionId               String?
+  yearlySeriesId           String?
+  yearlySeriesImageId      String?
+  selectedOption           String?
   submittedAnswer          String
   normalizedSubmittedAnswer String
   isCorrect                Boolean
   scoreAwarded             Int         @default(0)
   answeredAt               DateTime    @default(now())
   session                  GameSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  question                 Question    @relation(fields: [questionId], references: [id], onDelete: Restrict)
+  question                 Question?   @relation(fields: [questionId], references: [id], onDelete: Restrict)
+  yearlySeries             YearlySeries? @relation(fields: [yearlySeriesId], references: [id], onDelete: Restrict)
+  yearlySeriesImage        YearlySeriesImage? @relation(fields: [yearlySeriesImageId], references: [id], onDelete: Restrict)
 
-  @@unique([sessionId, questionId])
+  @@unique([sessionId, turnKey])
   @@index([sessionId, answeredAt])
+  @@index([sessionId, mode, answeredAt])
 }
 
 model LeaderboardEntry {
   id             String           @id @default(cuid())
   scope          LeaderboardScope
+  mode           GameMode         @default(CLASSIC)
   dateKey        String?
   nickname       String
   normalizedNickname String
@@ -110,6 +142,79 @@ model LeaderboardEntry {
   session        GameSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@unique([scope, sessionId])
-  @@unique([scope, dateKey, normalizedNickname])
-  @@index([scope, dateKey, score(sort: Desc), durationMs])
+  @@unique([scope, mode, dateKey, normalizedNickname])
+  @@index([scope, mode, dateKey, score(sort: Desc), durationMs])
+}
+
+model YearlySeries {
+  id              String              @id @default(cuid())
+  year            Int
+  title           String
+  normalizedTitle String
+  tags            String[]
+  studios         String[]
+  authors         String[]
+  active          Boolean             @default(true)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  images          YearlySeriesImage[]
+  attempts        AnswerAttempt[]
+
+  @@unique([year, normalizedTitle])
+  @@index([year, active])
+}
+
+model YearlySeriesImage {
+  id             String         @id @default(cuid())
+  seriesId       String
+  imageUrl       String
+  imageStorageKey String?
+  sourcePath     String?
+  sourceFileName String?
+  fileHash       String?
+  createdAt      DateTime       @default(now())
+  series         YearlySeries   @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+  attempts       AnswerAttempt[]
+
+  @@unique([seriesId, fileHash])
+  @@index([seriesId])
+}
+
+model YearlyImportJob {
+  id             String               @id @default(cuid())
+  status         YearlyImportJobStatus @default(PENDING)
+  archiveName    String
+  totalItems     Int                  @default(0)
+  processedItems Int                  @default(0)
+  importedItems  Int                  @default(0)
+  errorItems     Int                  @default(0)
+  cursor         Int                  @default(0)
+  summary        Json?
+  lastError      String?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  finishedAt     DateTime?
+  items          YearlyImportItem[]
+
+  @@index([status, updatedAt])
+}
+
+model YearlyImportItem {
+  id                    String                 @id @default(cuid())
+  jobId                 String
+  itemIndex             Int
+  year                  Int
+  seriesTitle           String
+  normalizedSeriesTitle String
+  filePath              String
+  fileName              String
+  fileHash              String?
+  status                YearlyImportItemStatus @default(PENDING)
+  error                 String?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  job                   YearlyImportJob        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, itemIndex])
+  @@index([jobId, status, itemIndex])
 }
