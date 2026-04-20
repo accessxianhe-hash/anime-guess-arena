@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { requireAdminSession } from "@/lib/admin";
+import { createRouteLogger, errorMessage, getRequestId } from "@/lib/observability";
 import { getYearlyImportJobLog, toYearlyImportLogCsv } from "@/lib/yearly-import";
 
 type Context = {
@@ -12,9 +13,16 @@ function resolveStatus(message: string) {
 }
 
 export async function GET(request: Request, context: Context) {
+  const requestId = getRequestId(request);
+  const { id } = await context.params;
+  const logger = createRouteLogger({
+    module: "api.admin.yearly-import.jobs.id.log",
+    requestId,
+  });
+
   try {
     await requireAdminSession();
-    const { id } = await context.params;
+
     const url = new URL(request.url);
     const format = (url.searchParams.get("format") ?? "json").toLowerCase();
     const scope = (url.searchParams.get("scope") ?? "failed").toLowerCase();
@@ -24,24 +32,44 @@ export async function GET(request: Request, context: Context) {
 
     if (format === "csv") {
       const csv = toYearlyImportLogCsv(rows);
+      logger.info("yearlyImport.job.log.exportCsv.success", {
+        jobId: id,
+        scope,
+        totalRows: rows.length,
+        failedCount: log.failedItems.length,
+      });
       return new NextResponse(csv, {
         headers: {
           "Content-Type": "text/csv; charset=utf-8",
-          "Content-Disposition": `attachment; filename="yearly-import-${id}-${scope}.csv"`,
+          "Content-Disposition": `attachment; filename=\"yearly-import-${id}-${scope}.csv\"`,
+          "x-request-id": requestId,
         },
       });
     }
 
-    return NextResponse.json({
-      generatedAt: log.generatedAt,
+    logger.info("yearlyImport.job.log.get.success", {
+      jobId: id,
       scope,
-      job: log.job,
       totalRows: rows.length,
-      rows,
       failedCount: log.failedItems.length,
     });
+    return NextResponse.json(
+      {
+        generatedAt: log.generatedAt,
+        scope,
+        job: log.job,
+        totalRows: rows.length,
+        rows,
+        failedCount: log.failedItems.length,
+      },
+      { headers: { "x-request-id": requestId } },
+    );
   } catch (error) {
-    const message = error instanceof Error ? error.message : "导出导入日志失败。";
-    return NextResponse.json({ error: message }, { status: resolveStatus(message) });
+    const message = errorMessage(error, "Failed to export yearly import log.");
+    logger.error("yearlyImport.job.log.get.failed", { jobId: id, error, message });
+    return NextResponse.json(
+      { error: message },
+      { status: resolveStatus(message), headers: { "x-request-id": requestId } },
+    );
   }
 }

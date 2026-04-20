@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { requireAdminSession } from "@/lib/admin";
+import { createRouteLogger, errorMessage, getRequestId } from "@/lib/observability";
 import { getYearlyImportJob, pauseYearlyImportJob } from "@/lib/yearly-import";
 
 type Context = {
@@ -11,36 +12,76 @@ function resolveStatus(message: string) {
   return /unauthorized|未授权|请先登录/i.test(message) ? 401 : 400;
 }
 
-export async function GET(_: Request, context: Context) {
+export async function GET(request: Request, context: Context) {
+  const requestId = getRequestId(request);
+  const { id } = await context.params;
+  const logger = createRouteLogger({
+    module: "api.admin.yearly-import.jobs.id",
+    requestId,
+  });
+
   try {
     await requireAdminSession();
-    const { id } = await context.params;
     const job = await getYearlyImportJob(id);
-    return NextResponse.json({ job });
+    logger.info("yearlyImport.job.get.success", {
+      jobId: id,
+      status: job.status,
+      processedItems: job.processedItems,
+      totalItems: job.totalItems,
+      errorItems: job.errorItems,
+    });
+    return NextResponse.json(
+      { job },
+      { headers: { "x-request-id": requestId } },
+    );
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "无法读取导入任务状态。";
-    return NextResponse.json({ error: message }, { status: resolveStatus(message) });
+    const message = errorMessage(error, "Unable to fetch yearly import job.");
+    logger.error("yearlyImport.job.get.failed", { jobId: id, error, message });
+    return NextResponse.json(
+      { error: message },
+      { status: resolveStatus(message), headers: { "x-request-id": requestId } },
+    );
   }
 }
 
 export async function PATCH(request: Request, context: Context) {
+  const requestId = getRequestId(request);
+  const { id } = await context.params;
+  const logger = createRouteLogger({
+    module: "api.admin.yearly-import.jobs.id",
+    requestId,
+  });
+
   try {
     await requireAdminSession();
-    const { id } = await context.params;
     const body = (await request.json().catch(() => ({}))) as { action?: string };
 
     if (body.action !== "pause") {
+      logger.warn("yearlyImport.job.pause.invalidAction", {
+        jobId: id,
+        action: body.action ?? null,
+      });
       return NextResponse.json(
-        { error: "仅支持 action=pause。" },
-        { status: 400 },
+        { error: "Only action=pause is supported." },
+        { status: 400, headers: { "x-request-id": requestId } },
       );
     }
 
     const job = await pauseYearlyImportJob(id);
-    return NextResponse.json({ job });
+    logger.info("yearlyImport.job.pause.success", {
+      jobId: id,
+      status: job.status,
+    });
+    return NextResponse.json(
+      { job },
+      { headers: { "x-request-id": requestId } },
+    );
   } catch (error) {
-    const message = error instanceof Error ? error.message : "暂停导入任务失败。";
-    return NextResponse.json({ error: message }, { status: resolveStatus(message) });
+    const message = errorMessage(error, "Failed to pause yearly import job.");
+    logger.error("yearlyImport.job.pause.failed", { jobId: id, error, message });
+    return NextResponse.json(
+      { error: message },
+      { status: resolveStatus(message), headers: { "x-request-id": requestId } },
+    );
   }
 }
