@@ -1,18 +1,35 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 import { listYearlyAvailableYears } from "@/lib/game";
+import { createRouteLogger, errorMessage, getRequestId } from "@/lib/observability";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const requestId = getRequestId(request);
+  const logger = createRouteLogger({
+    module: "api.game.years",
+    requestId,
+  });
+
   try {
     const years = await listYearlyAvailableYears();
-    return NextResponse.json({ years });
-  } catch (error) {
+    logger.info("game.years.success", {
+      count: years.length,
+      years,
+    });
+
     return NextResponse.json(
-      {
-        error:
-          error instanceof Error ? error.message : "无法获取可用年份列表。",
-      },
-      { status: 500 },
+      { years },
+      { headers: { "x-request-id": requestId } },
+    );
+  } catch (error) {
+    const message = errorMessage(error, "Failed to list available years.");
+    logger.error("game.years.failed", {
+      message,
+      error,
+    });
+    return NextResponse.json(
+      { error: message },
+      { status: 500, headers: { "x-request-id": requestId } },
     );
   }
 }

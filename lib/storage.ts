@@ -23,6 +23,13 @@ type DownloadResult = {
   contentType: string;
 };
 
+export type StorageProbeResult = {
+  ok: boolean;
+  provider: "local" | "s3";
+  elapsedMs: number;
+  message: string;
+};
+
 function sanitizeFilename(filename: string) {
   return filename.replace(/[^a-zA-Z0-9.\-_]/g, "-").replace(/-+/g, "-");
 }
@@ -180,4 +187,60 @@ export async function downloadQuestionImage(
     body: await readFile(target),
     contentType: guessContentType(storageKey),
   };
+}
+
+export async function probeStorageConnectivity(): Promise<StorageProbeResult> {
+  const startedAt = Date.now();
+  const provider = getStorageProvider();
+
+  try {
+    if (provider === "s3") {
+      assertStorageRuntimeReady();
+      const client = getS3Client();
+      const probeKey = `${process.env.S3_KEY_PREFIX?.replace(/^\/+|\/+$/g, "") || "health"}/health/probe-${randomUUID()}.txt`;
+
+      await client.send(
+        new PutObjectCommand({
+          Bucket: process.env.S3_BUCKET!,
+          Key: probeKey,
+          Body: Buffer.from("ok"),
+          ContentType: "text/plain",
+        }),
+      );
+
+      await client.send(
+        new DeleteObjectCommand({
+          Bucket: process.env.S3_BUCKET!,
+          Key: probeKey,
+        }),
+      );
+
+      return {
+        ok: true,
+        provider,
+        elapsedMs: Date.now() - startedAt,
+        message: "S3 write/delete probe succeeded.",
+      };
+    }
+
+    const probeDir = path.join(process.cwd(), "tmp", "health-probe");
+    const probeFile = path.join(probeDir, `${randomUUID()}.txt`);
+    await mkdir(probeDir, { recursive: true });
+    await writeFile(probeFile, Buffer.from("ok"));
+    await rm(probeFile, { force: true });
+
+    return {
+      ok: true,
+      provider,
+      elapsedMs: Date.now() - startedAt,
+      message: "Local storage write/delete probe succeeded.",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      provider,
+      elapsedMs: Date.now() - startedAt,
+      message: error instanceof Error ? error.message : "Unknown storage probe failure.",
+    };
+  }
 }
