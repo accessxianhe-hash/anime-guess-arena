@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Bangumi Subject Image Export
 // @namespace    https://anime-guess-arena.local/
-// @version      0.1.2
+// @version      0.1.4
 // @description  Export user-posted images for a single Bangumi subject with source manifests.
 // @author       Codex
 // @match        https://bgm.tv/subject/*
@@ -20,16 +20,19 @@
   "use strict";
 
   const EXPORT_ROOT = "bangumi-export";
+  const SCRIPT_VERSION = "0.1.4";
   const IMAGE_DIR = "images";
-  const MIN_PAGE_DELAY_MS = 700;
-  const MAX_PAGE_DELAY_MS = 1600;
-  const PAGE_FETCH_TIMEOUT_MS = 20000;
-  const IMAGE_DOWNLOAD_CONCURRENCY = 2;
-  const MAX_IMAGE_DOWNLOAD_RETRIES = 2;
-  const IMAGE_REQUEST_TIMEOUT_MS = 12000;
+  const MIN_PAGE_DELAY_MS = 420;
+  const MAX_PAGE_DELAY_MS = 980;
+  const EP_ONLY_MIN_PAGE_DELAY_MS = 120;
+  const EP_ONLY_MAX_PAGE_DELAY_MS = 360;
+  const PAGE_FETCH_TIMEOUT_MS = 14000;
+  const IMAGE_DOWNLOAD_CONCURRENCY = 3;
+  const MAX_IMAGE_DOWNLOAD_RETRIES = 1;
+  const IMAGE_REQUEST_TIMEOUT_MS = 6500;
   const PAGE_PROCESS_TIMEOUT_MS = 35000;
   const PAGE_MAX_RETRIES = 2;
-  const STALL_AUTO_RESET_MS = 90000;
+  const STALL_AUTO_RESET_MS = 45000;
   const IMAGE_HOST_FAIL_THRESHOLD = 3;
   const IMAGE_HOST_COOLDOWN_MS = 120000;
   const MAX_PAGE_ERROR_STREAK = 3;
@@ -42,7 +45,7 @@
   const MAX_IMAGE_ASPECT_RATIO = 2.4;
   const QUALITY_SAMPLE_MAX_EDGE = 256;
   const MIN_IMAGE_EDGE_SCORE = 8;
-  const PANEL_PREVIEW_LIMIT = 4;
+  const PANEL_ACCEPTED_PREVIEW_LIMIT = 60;
   const MAX_PAGE_QUEUE = 180;
   const MAX_COMMENT_PAGE = 12;
   const MAX_REVIEW_PAGE = 8;
@@ -265,12 +268,16 @@
     processedPages: 0,
     recentAcceptedPreviews: [],
     recentFilteredPreviews: [],
+    manualIncludedPreviewIds: new Set(),
+    manualIncludeInFlightIds: new Set(),
     imageHostFailures: new Map(),
     statusText: "待命",
     statusKind: "idle",
     crawlMode: readCrawlMode(),
     panelCollapsed: readPanelCollapsed(),
     panelPosition: readPanelPosition(),
+    panelScrollTop: 0,
+    panelScrollTopPinned: null,
     pageAttemptMap: new Map(),
     lastProgressAt: Date.now(),
   };
@@ -307,6 +314,16 @@
       super(`页面处理超时（>${Math.round(PAGE_PROCESS_TIMEOUT_MS / 1000)}s）: ${pageUrl}`);
       this.name = "PageProcessTimeoutError";
       this.pageUrl = pageUrl;
+    }
+  }
+
+  function pinPanelScrollFromDom() {
+    const root = document.getElementById(PANEL_ID);
+    const body = root?.querySelector?.('[data-panel-body]');
+    const scrollTop = body?.scrollTop;
+    if (Number.isFinite(scrollTop)) {
+      state.panelScrollTop = scrollTop;
+      state.panelScrollTopPinned = scrollTop;
     }
   }
 
@@ -502,7 +519,8 @@
         }
       }
 
-      await randomDelay(MIN_PAGE_DELAY_MS, MAX_PAGE_DELAY_MS);
+      const [delayMin, delayMax] = getPageDelayRange();
+      await randomDelay(delayMin, delayMax);
     }
 
     await finalizeExport();
@@ -536,10 +554,13 @@
     revokePreviewList(state.recentFilteredPreviews);
     state.recentAcceptedPreviews = [];
     state.recentFilteredPreviews = [];
+    state.manualIncludedPreviewIds = new Set();
+    state.manualIncludeInFlightIds = new Set();
     state.imageHostFailures = new Map();
     state.pageAttemptMap = new Map();
     state.statusText = "待命";
     state.statusKind = "idle";
+    state.panelScrollTop = 0;
     state.lastProgressAt = Date.now();
   }
 
@@ -622,6 +643,13 @@
       markProgress();
       renderPanel();
     }
+  }
+
+  function getPageDelayRange() {
+    if (isEpOnlyMode()) {
+      return [EP_ONLY_MIN_PAGE_DELAY_MS, EP_ONLY_MAX_PAGE_DELAY_MS];
+    }
+    return [MIN_PAGE_DELAY_MS, MAX_PAGE_DELAY_MS];
   }
 
   async function downloadImageCandidates(candidates, subject) {
@@ -2196,7 +2224,32 @@
     return merged.find((item) => item?.id === previewId) || null;
   }
 
+  function removePreviewRecordById(previewId) {
+    if (!previewId) {
+      return;
+    }
+
+    const removeFrom = (list) => {
+      if (!Array.isArray(list) || !list.length) {
+        return list;
+      }
+      const next = [];
+      for (const item of list) {
+        if (item?.id === previewId) {
+          revokePreviewRecord(item);
+        } else {
+          next.push(item);
+        }
+      }
+      return next;
+    };
+
+    state.recentFilteredPreviews = removeFrom(state.recentFilteredPreviews);
+    state.recentAcceptedPreviews = removeFrom(state.recentAcceptedPreviews);
+  }
+
   async function includePreviewRecordById(previewId) {
+    pinPanelScrollFromDom();
     const record = findPreviewRecordById(previewId);
     if (!record) {
       updateStatus("未找到可收录的预览记录。", "warning");
@@ -2208,6 +2261,14 @@
     }
     if (!state.currentSubject) {
       updateStatus("当前没有可写入的抓取任务。", "warning");
+      return;
+    }
+    if (state.manualIncludedPreviewIds.has(previewId)) {
+      updateStatus("该图片已手动收录，已跳过重复操作。", "warning");
+      return;
+    }
+    if (state.manualIncludeInFlightIds.has(previewId)) {
+      updateStatus("该图片正在收录中，请稍候。", "active");
       return;
     }
 
@@ -2226,7 +2287,11 @@
     };
 
     try {
+      state.manualIncludeInFlightIds.add(previewId);
       await processImageCandidate(candidate, subject, { bypassQuality: true, forceInclude: true });
+      state.manualIncludedPreviewIds.add(previewId);
+      removePreviewRecordById(previewId);
+      renderPanel();
       updateStatus("已手动收录该图片。", "done");
     } catch (error) {
       logError("manual_include_failed", {
@@ -2235,7 +2300,19 @@
         message: error?.message || String(error),
       });
       updateStatus("手动收录失败，请稍后重试。", "error");
+    } finally {
+      state.manualIncludeInFlightIds.delete(previewId);
     }
+  }
+
+  function getPreviewListLimit(key) {
+    if (key === "recentFilteredPreviews") {
+      return Number.POSITIVE_INFINITY;
+    }
+    if (key === "recentAcceptedPreviews") {
+      return PANEL_ACCEPTED_PREVIEW_LIMIT;
+    }
+    return 20;
   }
 
   function pushPreviewRecord(key, record) {
@@ -2244,9 +2321,12 @@
     }
     const list = Array.isArray(state[key]) ? state[key].slice() : [];
     list.unshift(record);
-    while (list.length > PANEL_PREVIEW_LIMIT) {
-      const removed = list.pop();
-      revokePreviewRecord(removed);
+    const limit = getPreviewListLimit(key);
+    if (Number.isFinite(limit)) {
+      while (list.length > limit) {
+        const removed = list.pop();
+        revokePreviewRecord(removed);
+      }
     }
     state[key] = list;
   }
@@ -2268,14 +2348,14 @@
               data-preview-id="${escapeHtml(record.id)}"
               style="border:0;border-radius:8px;padding:4px 8px;background:#dff4ea;color:#1f7a57;font-size:11px;font-weight:700;cursor:pointer;"
             >
-              收录本张
+              收录并移除
             </button>
           `
       : "";
 
     return `
-      <div style="display:flex;gap:10px;align-items:flex-start;">
-        <div style="width:72px;height:72px;border-radius:12px;overflow:hidden;background:#eef2f7;flex:0 0 auto;">
+      <div style="display:flex;flex-direction:column;gap:8px;align-items:stretch;">
+        <div style="width:100%;aspect-ratio:16/9;min-height:176px;border-radius:12px;overflow:hidden;background:#eef2f7;flex:0 0 auto;border:1px solid rgba(70,82,112,.14);">
           <img src="${escapeHtml(record.previewUrl)}" alt="preview" style="width:100%;height:100%;object-fit:cover;display:block;" />
         </div>
         <div style="min-width:0;">
@@ -2286,6 +2366,14 @@
           ${meta}
           ${reason}
           <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+            <button
+              type="button"
+              data-action="preview-open-image"
+              data-preview-url="${escapeHtml(record.previewUrl)}"
+              style="border:0;border-radius:8px;padding:4px 8px;background:#f2edff;color:#5b4399;font-size:11px;font-weight:700;cursor:pointer;"
+            >
+              看大图
+            </button>
             <button
               type="button"
               data-action="preview-open"
@@ -2370,9 +2458,16 @@
     return true;
   }
 
-  function renderPreviewSection(title, description, items, emptyText) {
+  function renderPreviewSection(title, description, items, emptyText, options = {}) {
+    const columnCount = Math.max(1, Math.min(3, Number(options.columnCount) || 1));
+    const cardMinWidth = Number(options.cardMinWidth) || 180;
     const body = items?.length
-      ? items.map((item) => renderPreviewCard(item)).join('<div style="height:10px;"></div>')
+      ? `<div style="display:grid;grid-template-columns:repeat(${columnCount}, minmax(${cardMinWidth}px, 1fr));gap:10px;">${items
+          .map(
+            (item) =>
+              `<div style="border:1px solid rgba(79,93,133,.12);border-radius:12px;padding:10px;background:#ffffff;">${renderPreviewCard(item)}</div>`
+          )
+          .join("")}</div>`
       : `<div style="font-size:11px;color:#8a93ab;">${escapeHtml(emptyText)}</div>`;
 
     return `
@@ -2396,7 +2491,7 @@
     root.id = PANEL_ID;
     root.style.position = "fixed";
     root.style.zIndex = "2147483646";
-    root.style.width = "328px";
+    root.style.width = "920px";
     root.style.maxWidth = "calc(100vw - 24px)";
     root.style.borderRadius = "18px";
     root.style.border = "1px solid rgba(62,78,120,.14)";
@@ -2415,6 +2510,10 @@
 
   function renderPanel() {
     const root = ensurePanel();
+    const previousBody = root.querySelector('[data-panel-body]');
+    if (previousBody) {
+      state.panelScrollTop = previousBody.scrollTop || 0;
+    }
     const subjectTitle = state.currentSubject?.title || "等待开始";
     const subjectMeta = state.currentSubject ? `subject #${state.currentSubject.id}` : "打开作品页后开始抓取";
     const statusLabel = getStatusLabel(state.statusKind);
@@ -2427,7 +2526,7 @@
     root.innerHTML = `
       <div data-drag-handle="panel" style="padding:14px 16px 12px;border-bottom:1px solid rgba(84,97,142,.1);display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:move;user-select:none;">
         <div style="min-width:0;">
-          <div style="font-size:15px;font-weight:700;letter-spacing:.02em;">Bangumi 抓图器</div>
+          <div style="font-size:15px;font-weight:700;letter-spacing:.02em;">Bangumi 抓图器 v${escapeHtml(SCRIPT_VERSION)}</div>
           <div style="margin-top:4px;font-size:12px;color:#697391;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(subjectTitle)}</div>
         </div>
         <div style="display:flex;align-items:center;gap:8px;">
@@ -2454,13 +2553,38 @@
           <button type="button" data-action="preview-copy-csv-batch" style="${buildPanelButtonStyle("#eaf7ef", "#2f6a48")}">批量复制CSV(4条)</button>
           <button type="button" data-action="reset" style="${buildPanelButtonStyle("#ffe9ec", "#a34152")}">强制重置</button>
         </div>
-        ${renderPreviewSection("最新已保存", "最近通过质量检查的图片", state.recentAcceptedPreviews, "暂无预览")}
-        ${renderPreviewSection("最近被过滤", "质量未通过的图片", state.recentFilteredPreviews, "暂无记录")}
+        ${renderPreviewSection(
+          `最新已保存（${state.recentAcceptedPreviews.length}）`,
+          "最近通过质量检查的图片",
+          state.recentAcceptedPreviews,
+          "暂无预览",
+          { columnCount: 2, cardMinWidth: 300 }
+        )}
+        ${renderPreviewSection(
+          `最近被过滤（全部 ${state.recentFilteredPreviews.length}）`,
+          "质量未通过的图片（本次任务全部记录）",
+          state.recentFilteredPreviews,
+          "暂无记录",
+          { columnCount: 3, cardMinWidth: 250 }
+        )}
         <div style="margin-top:12px;border-radius:14px;background:#f7f9fc;padding:10px 12px;font-size:11px;line-height:1.7;color:#6a728a;">
           建议使用专用账号、单作品、低并发运行。若遇到验证码、403/429 或登录失效，请先暂停后再继续。
         </div>
       </div>
     `;
+
+    const currentBody = root.querySelector('[data-panel-body]');
+    if (currentBody) {
+      const nextScrollTop =
+        state.panelScrollTopPinned !== null && state.panelScrollTopPinned !== undefined
+          ? state.panelScrollTopPinned
+          : state.panelScrollTop;
+      currentBody.scrollTop = Math.max(0, nextScrollTop || 0);
+      state.panelScrollTopPinned = null;
+      currentBody.addEventListener("scroll", () => {
+        state.panelScrollTop = currentBody.scrollTop || 0;
+      });
+    }
 
     root.querySelector('[data-action="toggle-collapse"]').addEventListener("click", () => setPanelCollapsed(!state.panelCollapsed));
     root.querySelector('[data-action="start"]').addEventListener("click", handleStartFromPanel);
@@ -2477,6 +2601,16 @@
       });
     });
     root.querySelector('[data-action="refresh"]').addEventListener("click", renderPanel);
+    root.querySelectorAll('[data-action="preview-open-image"]').forEach((button) => {
+      button.addEventListener("click", () => {
+        const previewUrl = button.getAttribute("data-preview-url");
+        if (!previewUrl) {
+          updateStatus("该预览没有可用大图。", "warning");
+          return;
+        }
+        window.open(previewUrl, "_blank", "noopener,noreferrer");
+      });
+    });
     root.querySelectorAll('[data-action="preview-open"]').forEach((button) => {
       button.addEventListener("click", () => {
         const sourceUrl = button.getAttribute("data-source-url");
@@ -2540,6 +2674,7 @@
           updateStatus("无法识别预览记录。", "warning");
           return;
         }
+        pinPanelScrollFromDom();
         button.disabled = true;
         try {
           await includePreviewRecordById(previewId);
