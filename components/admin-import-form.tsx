@@ -123,6 +123,44 @@ function ratioToPercent(value: number) {
   return `${Math.max(0, Math.min(100, safe * 100)).toFixed(1)}%`;
 }
 
+async function parseJsonBody<T>(response: Response): Promise<T | null> {
+  try {
+    return (await response.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+function pickPayloadError(payload: { error?: string } | null | undefined) {
+  if (!payload || typeof payload.error !== "string") return null;
+  const message = payload.error.trim();
+  return message.length > 0 ? message : null;
+}
+
+async function resolveHttpErrorMessage(
+  response: Response,
+  fallback: string,
+  payload?: { error?: string } | null,
+) {
+  const payloadMessage = pickPayloadError(payload);
+  if (payloadMessage) return payloadMessage;
+
+  if (response.status === 413) {
+    return "上传文件过大（HTTP 413）。请先调大反向代理的上传限制后重试。";
+  }
+  if (response.status === 504) {
+    return "网关超时（HTTP 504）。请先调大反向代理超时后重试。";
+  }
+
+  const rawText = (await response.text().catch(() => "")).trim();
+  if (rawText) {
+    const singleLine = rawText.replace(/\s+/g, " ");
+    return singleLine.length > 240 ? `${singleLine.slice(0, 240)}...` : singleLine;
+  }
+
+  return `${fallback}（HTTP ${response.status}）`;
+}
+
 export function AdminImportForm() {
   const [jobs, setJobs] = useState<YearlyImportJob[]>([]);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
@@ -182,12 +220,14 @@ export function AdminImportForm() {
         const response = await fetch("/api/admin/yearly-import/jobs", {
           cache: "no-store",
         });
-        const data = (await response.json()) as JobsResponse;
-        if (!response.ok || !data.jobs) {
-          throw new Error(data.error || "获取导入任务列表失败");
+        const data = await parseJsonBody<JobsResponse>(response.clone());
+        if (!response.ok || !data?.jobs) {
+          throw new Error(
+            await resolveHttpErrorMessage(response, "获取导入任务列表失败", data),
+          );
         }
 
-        const nextJobs = data.jobs ?? [];
+        const nextJobs = data.jobs;
         setJobs(nextJobs);
         setCurrentJobId((prev) => {
           if (keepCurrent && prev && nextJobs.some((job) => job.id === prev)) {
@@ -211,9 +251,11 @@ export function AdminImportForm() {
       const response = await fetch(`/api/admin/yearly-import/jobs/${jobId}`, {
         cache: "no-store",
       });
-      const data = (await response.json()) as JobResponse;
-      if (!response.ok || !data.job) {
-        throw new Error(data.error || "获取导入任务详情失败");
+      const data = await parseJsonBody<JobResponse>(response.clone());
+      if (!response.ok || !data?.job) {
+        throw new Error(
+          await resolveHttpErrorMessage(response, "获取导入任务详情失败", data),
+        );
       }
       upsertJob(data.job);
       return data.job;
@@ -263,9 +305,11 @@ export function AdminImportForm() {
         method: "POST",
         body: formData,
       });
-      const data = (await response.json()) as JobResponse;
-      if (!response.ok || !data.job) {
-        throw new Error(data.error || "创建导入任务失败");
+      const data = await parseJsonBody<JobResponse>(response.clone());
+      if (!response.ok || !data?.job) {
+        throw new Error(
+          await resolveHttpErrorMessage(response, "创建导入任务失败", data),
+        );
       }
 
       upsertJob(data.job);
@@ -298,9 +342,11 @@ export function AdminImportForm() {
         method: "POST",
         body: formData,
       });
-      const data = (await response.json()) as MetadataImportResponse;
-      if (!response.ok) {
-        throw new Error(data.error || "批量写入番剧元数据失败");
+      const data = await parseJsonBody<MetadataImportResponse>(response.clone());
+      if (!response.ok || !data) {
+        throw new Error(
+          await resolveHttpErrorMessage(response, "批量写入番剧元数据失败", data),
+        );
       }
 
       const previewErrors = (data.errors ?? []).slice(0, 3);
@@ -346,9 +392,9 @@ export function AdminImportForm() {
           body: JSON.stringify({ batchSize, maxBatches }),
         },
       );
-      const data = (await response.json()) as JobResponse;
-      if (!response.ok || !data.job) {
-        throw new Error(data.error || "继续导入失败");
+      const data = await parseJsonBody<JobResponse>(response.clone());
+      if (!response.ok || !data?.job) {
+        throw new Error(await resolveHttpErrorMessage(response, "继续导入失败", data));
       }
 
       upsertJob(data.job);
@@ -375,9 +421,9 @@ export function AdminImportForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "pause" }),
       });
-      const data = (await response.json()) as JobResponse;
-      if (!response.ok || !data.job) {
-        throw new Error(data.error || "暂停导入失败");
+      const data = await parseJsonBody<JobResponse>(response.clone());
+      if (!response.ok || !data?.job) {
+        throw new Error(await resolveHttpErrorMessage(response, "暂停导入失败", data));
       }
 
       upsertJob(data.job);
@@ -403,9 +449,9 @@ export function AdminImportForm() {
         `/api/admin/yearly-import/jobs/${currentJob.id}/retry-failed`,
         { method: "POST" },
       );
-      const data = (await response.json().catch(() => ({}))) as RetryFailedResponse;
-      if (!response.ok || !data.job) {
-        throw new Error(data.error || "重试失败项失败");
+      const data = await parseJsonBody<RetryFailedResponse>(response.clone());
+      if (!response.ok || !data?.job) {
+        throw new Error(await resolveHttpErrorMessage(response, "重试失败项失败", data));
       }
 
       upsertJob(data.job);
@@ -437,8 +483,8 @@ export function AdminImportForm() {
           { cache: "no-store" },
         );
         if (!response.ok) {
-          const data = (await response.json().catch(() => ({}))) as { error?: string };
-          throw new Error(data.error || "导出日志失败");
+          const data = await parseJsonBody<{ error?: string }>(response.clone());
+          throw new Error(await resolveHttpErrorMessage(response, "导出日志失败", data));
         }
 
         const blob = await response.blob();
