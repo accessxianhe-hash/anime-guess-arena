@@ -25,6 +25,10 @@ export default async function AdminImportPage() {
           适合一次性录入整批截图题目。系统会逐行校验 CSV，能导入的题目直接入库，
           出错的行会在结果里标出来。
         </p>
+        <p className="hero-copy" style={{ marginTop: 10 }}>
+          同一页面也支持上传番剧元数据 CSV，用于批量写入作者、制作社、题材标签和
+          Bangumi 标签等属性。
+        </p>
         <div
           className={storage.isReady ? "message success" : "message error"}
           style={{ marginTop: 16 }}

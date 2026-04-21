@@ -34,6 +34,18 @@ type RetryFailedResponse = {
   error?: string;
 };
 
+type MetadataImportResponse = {
+  totalRows?: number;
+  updatedSeries?: number;
+  createdSeries?: number;
+  skippedRows?: number;
+  errors?: Array<{
+    row: number;
+    message: string;
+  }>;
+  error?: string;
+};
+
 type ImportRuntimeProgress = {
   currentBatch: number;
   plannedBatches: number;
@@ -115,12 +127,16 @@ export function AdminImportForm() {
   const [jobs, setJobs] = useState<YearlyImportJob[]>([]);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [archiveFile, setArchiveFile] = useState<File | null>(null);
+  const [metadataFile, setMetadataFile] = useState<File | null>(null);
+  const [createMissingSeries, setCreateMissingSeries] = useState(false);
+  const [replaceExistingMetadata, setReplaceExistingMetadata] = useState(false);
   const [batchSize, setBatchSize] = useState(120);
   const [maxBatches, setMaxBatches] = useState(1);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [loadingJobs, setLoadingJobs] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [importingMetadata, setImportingMetadata] = useState(false);
   const [continuing, setContinuing] = useState(false);
   const [pausing, setPausing] = useState(false);
   const [retryingFailed, setRetryingFailed] = useState(false);
@@ -262,6 +278,55 @@ export function AdminImportForm() {
       setSubmitting(false);
     }
   }, [archiveFile, upsertJob]);
+
+  const handleImportMetadata = useCallback(async () => {
+    if (!metadataFile) {
+      setError("请先选择 metadata CSV 文件");
+      return;
+    }
+
+    setImportingMetadata(true);
+    setError("");
+    setMessage("");
+    try {
+      const formData = new FormData();
+      formData.append("metadata", metadataFile);
+      formData.append("createMissing", String(createMissingSeries));
+      formData.append("replaceExisting", String(replaceExistingMetadata));
+
+      const response = await fetch("/api/admin/yearly-import/metadata", {
+        method: "POST",
+        body: formData,
+      });
+      const data = (await response.json()) as MetadataImportResponse;
+      if (!response.ok) {
+        throw new Error(data.error || "批量写入番剧元数据失败");
+      }
+
+      const previewErrors = (data.errors ?? []).slice(0, 3);
+      const summary = `元数据写入完成：总行数 ${data.totalRows ?? 0}，更新 ${
+        data.updatedSeries ?? 0
+      }，新建 ${data.createdSeries ?? 0}，跳过 ${data.skippedRows ?? 0}，错误 ${
+        data.errors?.length ?? 0
+      }。`;
+      const errorHint =
+        previewErrors.length > 0
+          ? ` 示例错误：${previewErrors
+              .map((item) => `第 ${item.row} 行：${item.message}`)
+              .join("；")}`
+          : "";
+      setMessage(`${summary}${errorHint}`);
+      setMetadataFile(null);
+    } catch (metadataError) {
+      setError(
+        metadataError instanceof Error
+          ? metadataError.message
+          : "批量写入番剧元数据失败",
+      );
+    } finally {
+      setImportingMetadata(false);
+    }
+  }, [createMissingSeries, metadataFile, replaceExistingMetadata]);
 
   const handleContinue = useCallback(async () => {
     if (!currentJob) {
@@ -423,6 +488,48 @@ export function AdminImportForm() {
           disabled={submitting}
         >
           {submitting ? "创建中..." : "创建导入任务"}
+        </button>
+      </div>
+
+      <div className="stack" style={{ gap: 12 }}>
+        <label className="input-label" htmlFor="yearly-metadata-csv">
+          番剧元数据 CSV
+        </label>
+        <input
+          id="yearly-metadata-csv"
+          type="file"
+          accept=".csv,text/csv"
+          onChange={(event) => setMetadataFile(event.target.files?.[0] ?? null)}
+        />
+        <div className="text-muted" style={{ fontSize: "0.92rem" }}>
+          支持字段：year,title,studios,authors,themes,genres,tags,bangumi_tags,extra_tags,active。
+          多值建议用 | 分隔。
+        </div>
+        <label className="pill" style={{ width: "fit-content" }}>
+          <input
+            type="checkbox"
+            checked={createMissingSeries}
+            onChange={(event) => setCreateMissingSeries(event.target.checked)}
+            style={{ marginRight: 8 }}
+          />
+          允许创建缺失番剧（仅元数据，无图片）
+        </label>
+        <label className="pill" style={{ width: "fit-content" }}>
+          <input
+            type="checkbox"
+            checked={replaceExistingMetadata}
+            onChange={(event) => setReplaceExistingMetadata(event.target.checked)}
+            style={{ marginRight: 8 }}
+          />
+          覆盖已有 tags/studios/authors（默认关闭=合并）
+        </label>
+        <button
+          className="ghost-button"
+          type="button"
+          onClick={handleImportMetadata}
+          disabled={importingMetadata}
+        >
+          {importingMetadata ? "写入中..." : "批量写入番剧元数据"}
         </button>
       </div>
 
@@ -604,4 +711,3 @@ export function AdminImportForm() {
     </section>
   );
 }
-
