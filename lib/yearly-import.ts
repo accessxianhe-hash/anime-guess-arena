@@ -5,7 +5,7 @@ import {
 } from "@prisma/client";
 import JSZip from "jszip";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { prisma } from "@/lib/prisma";
@@ -17,6 +17,9 @@ const IMPORT_ARCHIVE_DIR = path.join(
   "data",
   "yearly-import-jobs",
 );
+const SERVER_IMPORT_ROOT =
+  process.env.YEARLY_IMPORT_SERVER_DIR?.trim() || "/opt/anime-guess-arena/imports";
+const MAX_SERVER_IMPORT_FILE_SIZE = 8 * 1024 * 1024 * 1024;
 const DEFAULT_BATCH_SIZE = 120;
 const MAX_BATCH_SIZE = 300;
 const CREATE_MANY_CHUNK_SIZE = 500;
@@ -708,8 +711,38 @@ async function autoHealStuckRunningJob<T extends AutoHealJobBase>(job: T): Promi
   };
 }
 
-export async function createYearlyImportJob(file: File) {
-  const archiveBuffer = Buffer.from(await file.arrayBuffer());
+function resolveServerImportArchivePath(serverPath: string) {
+  const input = serverPath.trim();
+  if (!input) {
+    throw new Error("Server ZIP path is required.");
+  }
+
+  const normalizedInput = input.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!normalizedInput || normalizedInput.includes("..")) {
+    throw new Error("Invalid server ZIP path.");
+  }
+
+  const root = path.resolve(SERVER_IMPORT_ROOT);
+  const absolutePath = path.resolve(root, normalizedInput);
+  if (absolutePath !== root && !absolutePath.startsWith(`${root}${path.sep}`)) {
+    throw new Error("Server ZIP path is outside the allowed import directory.");
+  }
+
+  if (path.extname(absolutePath).toLowerCase() !== ".zip") {
+    throw new Error("Only .zip files are supported for server import.");
+  }
+
+  return {
+    root,
+    absolutePath,
+    archiveName: normalizedInput,
+  };
+}
+
+async function createYearlyImportJobFromArchiveBuffer(
+  archiveBuffer: Buffer,
+  archiveName: string,
+) {
   const zip = await JSZip.loadAsync(archiveBuffer);
   const entries = Object.values(zip.files)
     .filter((entry) => !entry.dir)
@@ -728,7 +761,7 @@ export async function createYearlyImportJob(file: File) {
   const job = await prisma.yearlyImportJob.create({
     data: {
       status: YearlyImportJobStatus.PENDING,
-      archiveName: file.name,
+      archiveName,
       totalItems: entries.length,
       summary: {
         years,
@@ -775,6 +808,31 @@ export async function createYearlyImportJob(file: File) {
     seriesCount,
   });
   return mapJobSummary(refreshed);
+}
+
+export async function createYearlyImportJob(file: File) {
+  const archiveBuffer = Buffer.from(await file.arrayBuffer());
+  return createYearlyImportJobFromArchiveBuffer(archiveBuffer, file.name);
+}
+
+export async function createYearlyImportJobFromServerPath(serverPath: string) {
+  const resolved = resolveServerImportArchivePath(serverPath);
+  const metadata = await stat(resolved.absolutePath);
+
+  if (!metadata.isFile()) {
+    throw new Error("Server ZIP path is not a file.");
+  }
+  if (metadata.size <= 0) {
+    throw new Error("Server ZIP file is empty.");
+  }
+  if (metadata.size > MAX_SERVER_IMPORT_FILE_SIZE) {
+    throw new Error(
+      `Server ZIP is too large (${metadata.size} bytes). Limit is ${MAX_SERVER_IMPORT_FILE_SIZE} bytes.`,
+    );
+  }
+
+  const archiveBuffer = await readFile(resolved.absolutePath);
+  return createYearlyImportJobFromArchiveBuffer(archiveBuffer, resolved.archiveName);
 }
 
 export async function getYearlyImportJob(jobId: string) {

@@ -165,6 +165,7 @@ export function AdminImportForm() {
   const [jobs, setJobs] = useState<YearlyImportJob[]>([]);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [archiveFile, setArchiveFile] = useState<File | null>(null);
+  const [serverArchivePath, setServerArchivePath] = useState("");
   const [metadataFile, setMetadataFile] = useState<File | null>(null);
   const [createMissingSeries, setCreateMissingSeries] = useState(false);
   const [replaceExistingMetadata, setReplaceExistingMetadata] = useState(false);
@@ -174,6 +175,7 @@ export function AdminImportForm() {
   const [error, setError] = useState("");
   const [loadingJobs, setLoadingJobs] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [creatingFromServerPath, setCreatingFromServerPath] = useState(false);
   const [importingMetadata, setImportingMetadata] = useState(false);
   const [continuing, setContinuing] = useState(false);
   const [pausing, setPausing] = useState(false);
@@ -322,6 +324,48 @@ export function AdminImportForm() {
       setSubmitting(false);
     }
   }, [archiveFile, upsertJob]);
+
+  const handleCreateJobFromServerPath = useCallback(async () => {
+    const trimmedPath = serverArchivePath.trim();
+    if (!trimmedPath) {
+      setError("Please provide a server ZIP path.");
+      return;
+    }
+
+    setCreatingFromServerPath(true);
+    setError("");
+    setMessage("");
+    try {
+      const response = await fetch("/api/admin/yearly-import/jobs/from-server-file", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ serverPath: trimmedPath }),
+      });
+      const data = await parseJsonBody<JobResponse>(response.clone());
+      if (!response.ok || !data?.job) {
+        throw new Error(
+          await resolveHttpErrorMessage(
+            response,
+            "Failed to create import job from server file",
+            data,
+          ),
+        );
+      }
+
+      upsertJob(data.job);
+      setCurrentJobId(data.job.id);
+      setMessage("Server file import job created.");
+      setServerArchivePath("");
+    } catch (createError) {
+      setError(
+        createError instanceof Error
+          ? createError.message
+          : "Failed to create import job from server file",
+      );
+    } finally {
+      setCreatingFromServerPath(false);
+    }
+  }, [serverArchivePath, upsertJob]);
 
   const handleImportMetadata = useCallback(async () => {
     if (!metadataFile) {
@@ -534,6 +578,29 @@ export function AdminImportForm() {
           disabled={submitting}
         >
           {submitting ? "创建中..." : "创建导入任务"}
+        </button>
+        <div className="text-muted" style={{ fontSize: "0.9rem" }}>
+          Large files can be imported from server path to avoid browser upload timeout.
+        </div>
+        <label className="input-label" htmlFor="yearly-import-server-path">
+          Server ZIP path
+        </label>
+        <input
+          id="yearly-import-server-path"
+          type="text"
+          value={serverArchivePath}
+          onChange={(event) => setServerArchivePath(event.target.value)}
+          placeholder="relative to /opt/anime-guess-arena/imports, e.g. 2025.zip"
+        />
+        <button
+          className="ghost-button"
+          type="button"
+          onClick={handleCreateJobFromServerPath}
+          disabled={creatingFromServerPath}
+        >
+          {creatingFromServerPath
+            ? "Creating server import job..."
+            : "Create import job from server file"}
         </button>
       </div>
 
