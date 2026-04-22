@@ -37,6 +37,14 @@ And enables timer:
 
 - `anime-sync-deploy.timer` (every minute)
 
+The deploy script auto-detects an available app owner user in this order:
+
+1. `APP_OWNER` env override (if valid)
+2. `admin`
+3. `ubuntu`
+4. owner of `/opt/anime-guess-arena/app`
+5. current runtime user
+
 ## Daily Usage
 
 1. Local edit
@@ -46,7 +54,7 @@ And enables timer:
 Force immediate deploy:
 
 ```bash
-ssh admin@43.108.13.133 "sudo systemctl start anime-sync-deploy.service"
+sudo systemctl start anime-sync-deploy.service
 ```
 
 ## Verify

@@ -9,7 +9,8 @@ SRC_DIR="${SRC_DIR:-$BASE_DIR/deploy-src}"
 APP_DIR="${APP_DIR:-$BASE_DIR/app}"
 REPO_URL="${REPO_URL:-https://github.com/accessxianhe-hash/anime-guess-arena.git}"
 BRANCH="${BRANCH:-main}"
-APP_OWNER="${APP_OWNER:-admin}"
+APP_OWNER="${APP_OWNER:-}"
+APP_GROUP="${APP_GROUP:-}"
 
 STATE_FILE="${STATE_FILE:-$BASE_DIR/.last_deployed_sha}"
 LOCK_FILE="${LOCK_FILE:-/tmp/anime-sync-deploy.lock}"
@@ -26,6 +27,30 @@ fi
 
 log() {
   echo "[deploy] $(date '+%F %T') $*"
+}
+
+detect_owner() {
+  if [ -n "$APP_OWNER" ] && id "$APP_OWNER" >/dev/null 2>&1; then
+    :
+  elif id admin >/dev/null 2>&1; then
+    APP_OWNER="admin"
+  elif id ubuntu >/dev/null 2>&1; then
+    APP_OWNER="ubuntu"
+  elif [ -d "$APP_DIR" ]; then
+    APP_OWNER="$(stat -c '%U' "$APP_DIR" 2>/dev/null || true)"
+  fi
+
+  if [ -z "$APP_OWNER" ] || ! id "$APP_OWNER" >/dev/null 2>&1; then
+    APP_OWNER="$(id -un)"
+  fi
+
+  if [ -z "$APP_GROUP" ] || ! getent group "$APP_GROUP" >/dev/null 2>&1; then
+    APP_GROUP="$(id -gn "$APP_OWNER" 2>/dev/null || true)"
+  fi
+
+  if [ -z "$APP_GROUP" ] || ! getent group "$APP_GROUP" >/dev/null 2>&1; then
+    APP_GROUP="$APP_OWNER"
+  fi
 }
 
 ensure_fallback_dockerfile() {
@@ -61,7 +86,7 @@ EXPOSE 3000
 CMD ["npm", "run", "start", "--", "-H", "0.0.0.0", "-p", "3000"]
 DOCKERFILE
 
-  chown "$APP_OWNER:$APP_OWNER" "$APP_DIR/Dockerfile"
+  chown "$APP_OWNER:$APP_GROUP" "$APP_DIR/Dockerfile"
 }
 
 ensure_fallback_dockerignore() {
@@ -78,7 +103,7 @@ data
 tmp
 DOCKERIGNORE
 
-  chown "$APP_OWNER:$APP_OWNER" "$APP_DIR/.dockerignore"
+  chown "$APP_OWNER:$APP_GROUP" "$APP_DIR/.dockerignore"
 }
 
 check_http_code() {
@@ -106,6 +131,8 @@ wait_for_200() {
 }
 
 mkdir -p "$BASE_DIR"
+detect_owner
+log "owner resolved: $APP_OWNER:$APP_GROUP"
 
 if [ ! -d "$SRC_DIR/.git" ]; then
   log "initial clone: $REPO_URL ($BRANCH)"
@@ -132,7 +159,7 @@ git -C "$SRC_DIR" checkout -q "$BRANCH"
 git -C "$SRC_DIR" reset --hard -q "origin/$BRANCH"
 
 mkdir -p "$APP_DIR"
-rsync -az --chown="$APP_OWNER:$APP_OWNER" \
+rsync -az --chown="$APP_OWNER:$APP_GROUP" \
   --exclude '.git' \
   --exclude '.github' \
   --exclude 'node_modules' \
@@ -151,7 +178,7 @@ log "docker compose up -d --build anime-web"
 docker compose up -d --build anime-web
 
 printf '%s' "$target_sha" > "$STATE_FILE"
-chown "$APP_OWNER:$APP_OWNER" "$STATE_FILE"
+chown "$APP_OWNER:$APP_GROUP" "$STATE_FILE"
 
 anime_health="502"
 if anime_health="$(wait_for_200 "$ANIME_HEALTH_URL" 20 3)"; then
