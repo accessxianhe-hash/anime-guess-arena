@@ -1,0 +1,9 @@
+[Unit]
+Description=Sync anime app from GitHub and deploy anime-web
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/anime-guess-arena/bin/deploy-from-github.sh
+WorkingDirectory=/opt/anime-guess-arena
