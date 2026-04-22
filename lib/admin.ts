@@ -1,5 +1,6 @@
-import { Difficulty, type Prisma } from "@prisma/client";
+﻿import { Difficulty, type Prisma } from "@prisma/client";
 import JSZip from "jszip";
+import { createHash } from "node:crypto";
 
 import { auth } from "@/auth";
 import { parseCsv } from "@/lib/csv";
@@ -12,11 +13,14 @@ const INTERACTIVE_TX_OPTIONS = {
   maxWait: 10_000,
   timeout: 30_000,
 } as const;
+const IMPORT_ROW_TIMEOUT_MS = 45_000;
+const IMPORT_UPLOAD_MAX_RETRIES = 2;
+const IMPORT_UPLOAD_RETRY_BACKOFF_MS = 500;
 
 export async function requireAdminSession() {
   const session = await auth();
   if (!session?.user?.id) {
-    throw new Error("未授权访问后台。");
+    throw new Error("Unauthorized admin access.");
   }
 
   return session;
@@ -124,7 +128,7 @@ export async function parseQuestionFormData(
   });
 
   if (!parsed.success) {
-    throw new Error(parsed.error.issues[0]?.message ?? "题目表单校验失败。");
+    throw new Error(parsed.error.issues[0]?.message ?? "Question form validation failed.");
   }
 
   const imageEntry = formData.get("image");
@@ -139,7 +143,7 @@ export async function parseQuestionFormData(
   }
 
   if (requireImage && !image) {
-    throw new Error("创建题目时必须上传截图。");
+    throw new Error("Image is required when creating a question.");
   }
 
   return {
@@ -183,7 +187,7 @@ export async function saveQuestion(
     });
 
     if (!existing) {
-      throw new Error("要编辑的题目不存在。");
+      throw new Error("Question to edit was not found.");
     }
 
     const updated = await prisma.$transaction(async (tx) => {
@@ -245,11 +249,11 @@ export async function deleteQuestion(questionId: string) {
   });
 
   if (!existing) {
-    throw new Error("要删除的题目不存在。");
+    throw new Error("Question to delete was not found.");
   }
 
   if (existing._count.attempts > 0) {
-    throw new Error("该题目已经被对局使用，不能直接删除。请先下架。");
+    throw new Error("This question has attempts and cannot be deleted directly. Please disable it first.");
   }
 
   await prisma.question.delete({
@@ -294,8 +298,88 @@ function resolveZipFile(zip: JSZip, filename: string) {
     .at(0);
 }
 
+function normalizeZipLookupKey(filename: string) {
+  return filename.replace(/\\/g, "/").replace(/^\/+/, "").trim().toLowerCase();
+}
+
+function buildZipFileLookup(zip: JSZip) {
+  const lookup = new Map<string, JSZip.JSZipObject>();
+  for (const [path, entry] of Object.entries(zip.files)) {
+    if (entry.dir) continue;
+    lookup.set(normalizeZipLookupKey(path), entry);
+  }
+  return lookup;
+}
+
+function resolveZipFileFast(
+  zip: JSZip,
+  filename: string,
+  lookup: Map<string, JSZip.JSZipObject>,
+) {
+  const normalized = normalizeZipLookupKey(filename);
+  const hit = lookup.get(normalized);
+  if (hit) {
+    return hit;
+  }
+  return resolveZipFile(zip, filename);
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | null = null;
+
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(message));
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  });
+}
+
+function isRetryableImportError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /ECONNRESET|ETIMEDOUT|EAI_AGAIN|network|timeout|timed out|socket/i.test(message);
+}
+
+async function uploadQuestionImageWithRetry(
+  buffer: Buffer,
+  filename: string,
+  contentType: string,
+) {
+  const maxAttempts = IMPORT_UPLOAD_MAX_RETRIES + 1;
+  let attempt = 0;
+  let lastError: unknown = null;
+
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    try {
+      return await uploadQuestionImage(buffer, filename, contentType);
+    } catch (error) {
+      lastError = error;
+      const canRetry = attempt < maxAttempts && isRetryableImportError(error);
+      if (!canRetry) {
+        throw error;
+      }
+      await delay(IMPORT_UPLOAD_RETRY_BACKOFF_MS * attempt);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Image upload failed.");
+}
+
 export async function importQuestionsFromArchive(file: File): Promise<ImportResult> {
   const zip = await JSZip.loadAsync(Buffer.from(await file.arrayBuffer()));
+  const zipLookup = buildZipFileLookup(zip);
   const csvFile =
     zip.file("questions.csv") ??
     zip
@@ -303,11 +387,18 @@ export async function importQuestionsFromArchive(file: File): Promise<ImportResu
       .at(0);
 
   if (!csvFile) {
-    throw new Error("ZIP 包中缺少 questions.csv。");
+    throw new Error("questions.csv is missing in the ZIP archive.");
   }
 
   const rows = parseCsv(await csvFile.async("string"));
   const seenTitles = new Set<string>();
+  const uploadedByHash = new Map<
+    string,
+    {
+      storageKey: string;
+      publicUrl: string;
+    }
+  >();
   const errors: ImportResult["errors"] = [];
   let imported = 0;
 
@@ -318,7 +409,7 @@ export async function importQuestionsFromArchive(file: File): Promise<ImportResu
     if (!parsed.success) {
       errors.push({
         row: rowNumber,
-        message: parsed.error.issues[0]?.message ?? "CSV 行格式错误。",
+        message: parsed.error.issues[0]?.message ?? "CSV row validation failed.",
       });
       continue;
     }
@@ -327,27 +418,35 @@ export async function importQuestionsFromArchive(file: File): Promise<ImportResu
     if (seenTitles.has(normalizedTitle)) {
       errors.push({
         row: rowNumber,
-        message: "同一个导入包中存在重复作品名。",
+        message: "Duplicate canonical title found in the same import package.",
       });
       continue;
     }
     seenTitles.add(normalizedTitle);
 
-    const zipImage = resolveZipFile(zip, parsed.data.image_filename);
+    const zipImage = resolveZipFileFast(zip, parsed.data.image_filename, zipLookup);
     if (!zipImage) {
       errors.push({
         row: rowNumber,
-        message: `找不到图片文件：${parsed.data.image_filename}`,
+        message: `鎵句笉鍒板浘鐗囨枃浠讹細${parsed.data.image_filename}`,
       });
       continue;
     }
 
     try {
-      const uploaded = await uploadQuestionImage(
-        Buffer.from(await zipImage.async("uint8array")),
-        parsed.data.image_filename,
-        inferContentType(parsed.data.image_filename),
-      );
+      const imageBuffer = Buffer.from(await zipImage.async("uint8array"));
+      const contentType = inferContentType(parsed.data.image_filename);
+      const fileHash = createHash("sha256").update(imageBuffer).digest("hex");
+      let uploaded = uploadedByHash.get(fileHash);
+
+      if (!uploaded) {
+        uploaded = await withTimeout(
+          uploadQuestionImageWithRetry(imageBuffer, parsed.data.image_filename, contentType),
+          IMPORT_ROW_TIMEOUT_MS,
+          `Import row ${rowNumber} image upload timed out`,
+        );
+        uploadedByHash.set(fileHash, uploaded);
+      }
 
       const aliases = parsed.data.aliases
         ? parsed.data.aliases
@@ -405,7 +504,7 @@ export async function importQuestionsFromArchive(file: File): Promise<ImportResu
     } catch (error) {
       errors.push({
         row: rowNumber,
-        message: error instanceof Error ? error.message : "导入本行时发生未知错误。",
+        message: error instanceof Error ? error.message : "Unknown error while importing this row.",
       });
     }
   }
