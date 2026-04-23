@@ -27,7 +27,7 @@ export default async function AdminDashboardPage() {
               题库运营控制台
             </h1>
             <p className="hero-copy">
-              你好，{session.user.name ?? session.user.email}。这里负责题目管理、批量导入和站点概况查看。
+              你好，{session.user.name ?? session.user.email}。这里负责题库管理、批量导入和站点状态查看。
             </p>
           </div>
           <form action={logoutAction}>
@@ -39,12 +39,24 @@ export default async function AdminDashboardPage() {
 
         <div className="stat-grid">
           <div className="stat-card">
-            <span className="muted">题目总数</span>
+            <span className="muted">经典题目总数</span>
             <strong>{stats.questionCount}</strong>
           </div>
           <div className="stat-card">
-            <span className="muted">已上架题目</span>
+            <span className="muted">经典已上架题目</span>
             <strong>{stats.activeQuestionCount}</strong>
+          </div>
+          <div className="stat-card">
+            <span className="muted">年份作品总数</span>
+            <strong>{stats.yearlySeriesCount}</strong>
+          </div>
+          <div className="stat-card">
+            <span className="muted">年份已上架作品</span>
+            <strong>{stats.activeYearlySeriesCount}</strong>
+          </div>
+          <div className="stat-card">
+            <span className="muted">年份截图总数</span>
+            <strong>{stats.yearlyImageCount}</strong>
           </div>
           <div className="stat-card">
             <span className="muted">累计对局</span>
@@ -82,7 +94,7 @@ export default async function AdminDashboardPage() {
             打开健康检查 JSON
           </a>
           <div className="message">
-            生产部署前建议运行 <code>npm run deploy:check</code>，上线后再访问
+            生产部署前建议运行 <code>npm run deploy:check</code>，上线后再访问{" "}
             <code>/api/health</code> 复核数据库、认证地址和对象存储状态。
           </div>
         </section>
@@ -104,7 +116,7 @@ export default async function AdminDashboardPage() {
           <div className="feature-card">
             <h3>对象存储</h3>
             <p className="muted">
-              当前使用 {readiness.storage.provider}，上传前缀为
+              当前使用 {readiness.storage.provider}，上传前缀为{" "}
               <code>{readiness.storage.keyPrefix || "(空)"}</code>。
             </p>
           </div>

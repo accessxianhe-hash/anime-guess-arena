@@ -27,10 +27,21 @@ export async function requireAdminSession() {
 }
 
 export async function getAdminDashboardStats() {
-  const [questionCount, activeQuestionCount, sessionCount, leaderboardCount] =
+  const [
+    questionCount,
+    activeQuestionCount,
+    yearlySeriesCount,
+    activeYearlySeriesCount,
+    yearlyImageCount,
+    sessionCount,
+    leaderboardCount,
+  ] =
     await Promise.all([
       prisma.question.count(),
       prisma.question.count({ where: { active: true } }),
+      prisma.yearlySeries.count(),
+      prisma.yearlySeries.count({ where: { active: true } }),
+      prisma.yearlySeriesImage.count(),
       prisma.gameSession.count(),
       prisma.leaderboardEntry.count(),
     ]);
@@ -38,6 +49,9 @@ export async function getAdminDashboardStats() {
   return {
     questionCount,
     activeQuestionCount,
+    yearlySeriesCount,
+    activeYearlySeriesCount,
+    yearlyImageCount,
     sessionCount,
     leaderboardCount,
   };

@@ -16,21 +16,6 @@ async function getPreviewEntries() {
   }
 }
 
-type HeroQuestionRecord = {
-  id?: string | null;
-  canonicalTitle?: string | null;
-  title?: string | null;
-  animeTitle?: string | null;
-  correctAnswer?: string | null;
-  answer?: string | null;
-  imageUrl?: string | null;
-  imageStorageKey?: string | null;
-  image?: string | null;
-  screenshot?: string | null;
-  difficulty?: string | null;
-  tags?: string[] | null;
-};
-
 type HeroQuestion = {
   answer: string;
   imageUrl: string;
@@ -38,24 +23,35 @@ type HeroQuestion = {
   tags: string[];
 };
 
-function normalizeHeroQuestion(record: HeroQuestionRecord | null): HeroQuestion | null {
+type ClassicHeroQuestionRecord = {
+  canonicalTitle: string;
+  imageUrl: string;
+  imageStorageKey: string | null;
+  difficulty: string;
+  tags: string[];
+};
+
+type YearlyHeroQuestionRecord = {
+  imageUrl: string;
+  imageStorageKey: string | null;
+  series: {
+    title: string;
+    year: number;
+    tags: string[];
+    studios: string[];
+    authors: string[];
+  };
+};
+
+function normalizeHeroQuestionFromClassic(
+  record: ClassicHeroQuestionRecord | null,
+): HeroQuestion | null {
   if (!record) {
     return null;
   }
 
-  const answer =
-    record.canonicalTitle?.trim() ||
-    record.correctAnswer?.trim() ||
-    record.answer?.trim() ||
-    record.title?.trim() ||
-    record.animeTitle?.trim() ||
-    "";
-
-  const imageUrl =
-    record.imageUrl?.trim() ||
-    record.screenshot?.trim() ||
-    record.image?.trim() ||
-    "";
+  const answer = record.canonicalTitle?.trim() || "";
+  const imageUrl = record.imageUrl?.trim() || "";
   const imageStorageKey = record.imageStorageKey?.trim() || "";
 
   if (!answer || (!imageUrl && !imageStorageKey)) {
@@ -65,46 +61,135 @@ function normalizeHeroQuestion(record: HeroQuestionRecord | null): HeroQuestion 
   return {
     answer,
     imageUrl: buildQuestionImageSrc(imageStorageKey, imageUrl),
-    difficulty: record.difficulty?.trim() || "MEDIUM",
+    difficulty: record.difficulty || "MEDIUM",
     tags: Array.isArray(record.tags) ? record.tags.filter(Boolean) : [],
   };
 }
 
-async function getRandomHeroQuestion() {
-  try {
-    const total = await prisma.question.count({
-      where: {
+function normalizeHeroQuestionFromYearly(
+  record: YearlyHeroQuestionRecord | null,
+): HeroQuestion | null {
+  if (!record) {
+    return null;
+  }
+
+  const answer = record.series.title?.trim() || "";
+  const imageUrl = record.imageUrl?.trim() || "";
+  const imageStorageKey = record.imageStorageKey?.trim() || "";
+
+  if (!answer || (!imageUrl && !imageStorageKey)) {
+    return null;
+  }
+
+  const rawTags = [
+    `year-${record.series.year}`,
+    ...record.series.tags,
+    ...record.series.studios,
+    ...record.series.authors,
+  ];
+  const tags = Array.from(new Set(rawTags.map((tag) => tag.trim()).filter(Boolean)));
+
+  return {
+    answer,
+    imageUrl: buildQuestionImageSrc(imageStorageKey, imageUrl),
+    difficulty: "YEARLY",
+    tags,
+  };
+}
+
+async function getRandomClassicHero(offset: number) {
+  const record = await prisma.question.findFirst({
+    where: {
+      active: true,
+    },
+    orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+    skip: offset,
+    select: {
+      canonicalTitle: true,
+      imageUrl: true,
+      imageStorageKey: true,
+      difficulty: true,
+      tags: true,
+    },
+  });
+
+  return normalizeHeroQuestionFromClassic(record);
+}
+
+async function getRandomYearlyHero(offset: number) {
+  const record = await prisma.yearlySeriesImage.findFirst({
+    where: {
+      series: {
         active: true,
       },
-    });
+    },
+    orderBy: [{ createdAt: "desc" }],
+    skip: offset,
+    select: {
+      imageUrl: true,
+      imageStorageKey: true,
+      series: {
+        select: {
+          title: true,
+          year: true,
+          tags: true,
+          studios: true,
+          authors: true,
+        },
+      },
+    },
+  });
 
+  return normalizeHeroQuestionFromYearly(record);
+}
+
+async function getRandomHeroQuestion() {
+  try {
+    const [classicTotal, yearlyTotal] = await Promise.all([
+      prisma.question.count({
+        where: {
+          active: true,
+        },
+      }),
+      prisma.yearlySeriesImage.count({
+        where: {
+          series: {
+            active: true,
+          },
+        },
+      }),
+    ]);
+    const total = classicTotal + yearlyTotal;
     if (total === 0) {
       return null;
     }
 
     const offset = Math.floor(Math.random() * total);
-    const question = await prisma.question.findFirst({
-      where: {
-        active: true,
-      },
-      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
-      skip: offset,
-      select: {
-        id: true,
-        canonicalTitle: true,
-        imageUrl: true,
-        imageStorageKey: true,
-        difficulty: true,
-        tags: true,
-      },
-    });
 
-    const normalized = normalizeHeroQuestion(question);
-    if (!normalized) {
+    if (offset < classicTotal) {
+      const classicHero = await getRandomClassicHero(offset);
+      if (classicHero) {
+        return classicHero;
+      }
+
+      if (yearlyTotal > 0) {
+        return getRandomYearlyHero(Math.floor(Math.random() * yearlyTotal));
+      }
+
       return null;
     }
 
-    return normalized;
+    const yearlyOffset = offset - classicTotal;
+    const yearlyHero = await getRandomYearlyHero(yearlyOffset);
+    if (yearlyHero) {
+      return yearlyHero;
+    }
+
+    if (classicTotal > 0) {
+      return getRandomClassicHero(Math.floor(Math.random() * classicTotal));
+    }
+
+    return null;
   } catch {
     return null;
   }
@@ -139,16 +224,18 @@ export default async function HomePage() {
   const visualTags = heroQuestion?.tags.slice(0, 2) ?? [];
   const visualDifficulty =
     heroQuestion?.difficulty === "HARD"
-      ? "高难度"
+      ? "高难题"
       : heroQuestion?.difficulty === "EASY"
         ? "轻松题"
-        : "随机题库";
+        : heroQuestion?.difficulty === "YEARLY"
+          ? "年份题库"
+          : "随机题库";
 
   return (
     <div className="home-page">
       <section className="landing-hero">
         <div className="landing-copy">
-          <p className="landing-kicker">Anime Screenshot Guess</p>
+          <p className="landing-kicker">ANIME SCREENSHOT GUESS</p>
           <div className="landing-title-block">
             <span className="landing-accent">60 秒冲榜</span>
             <h1 className="landing-title">
@@ -156,9 +243,7 @@ export default async function HomePage() {
               <span>立刻说出作品名</span>
             </h1>
           </div>
-          <p className="landing-subtitle">
-            从熟悉的画面里认出番剧。答得越快，分数越高。
-          </p>
+          <p className="landing-subtitle">从熟悉的画面里认出番剧。答得越快，分数越高。</p>
 
           <div className="landing-actions">
             <Link href="/play" className="landing-button landing-button-primary">
@@ -192,23 +277,13 @@ export default async function HomePage() {
             </figure>
 
             <figure className="visual-frame visual-frame-top">
-              <img
-                src={visualFrameSource}
-                alt=""
-                className="visual-image visual-image-shifted"
-              />
+              <img src={visualFrameSource} alt="" className="visual-image visual-image-shifted" />
               <figcaption className="visual-frame-label">{visualDifficulty}</figcaption>
             </figure>
 
             <figure className="visual-frame visual-frame-bottom">
-              <img
-                src={visualFrameSource}
-                alt=""
-                className="visual-image visual-image-soft"
-              />
-              <figcaption className="visual-frame-label">
-                {visualTags[0] ?? "截图猜番"}
-              </figcaption>
+              <img src={visualFrameSource} alt="" className="visual-image visual-image-soft" />
+              <figcaption className="visual-frame-label">{visualTags[0] ?? "截图猜番"}</figcaption>
             </figure>
 
             <div className="visual-quiz-card">
