@@ -19,6 +19,7 @@
     "seed:prod-admin": "tsx prisma/seed-prod-admin.ts",
     "seed:prod-admin:file": "node scripts/run-tsx-with-env.mjs .env.production.local prisma/seed-prod-admin.ts",
     "yearly-import:auto-runner": "tsx scripts/yearly-import-auto-runner.ts",
+    "preview:tunnel": "powershell -ExecutionPolicy Bypass -File scripts/preview/start-temp-preview.ps1 -StartLocal",
     "vercel-build": "prisma generate && prisma migrate deploy && next build"
   },
   "dependencies": {
