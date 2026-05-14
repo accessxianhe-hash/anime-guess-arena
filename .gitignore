@@ -18,3 +18,5 @@ data/postgresql/
 tools/
 Git/
 Microsoft VS Code/
+
+.vercel

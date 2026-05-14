@@ -1,18 +1,35 @@
 import Link from "next/link";
 
+import { HomeRankingDrawer } from "@/components/home-ranking-drawer";
 import { prisma } from "@/lib/prisma";
 import { HOME_PREVIEW_LIMIT } from "@/lib/constants";
+import { getReactionLeaderboards } from "@/lib/challenge-reactions";
 import { getLeaderboard } from "@/lib/leaderboard";
 import { buildQuestionImageSrc } from "@/lib/question-images";
-import { formatPercent } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
 async function getPreviewEntries() {
   try {
-    return await getLeaderboard("daily", "classic", HOME_PREVIEW_LIMIT);
+    const [classicDaily, yearlyDaily, reactionDaily] = await Promise.all([
+      getLeaderboard("daily", "classic", HOME_PREVIEW_LIMIT),
+      getLeaderboard("daily", "yearly", HOME_PREVIEW_LIMIT),
+      getReactionLeaderboards("daily", HOME_PREVIEW_LIMIT),
+    ]);
+
+    return {
+      classicDaily,
+      yearlyDaily,
+      heartDaily: reactionDaily.hearts,
+      starDaily: reactionDaily.stars,
+    };
   } catch {
-    return [];
+    return {
+      classicDaily: [],
+      yearlyDaily: [],
+      heartDaily: [],
+      starDaily: [],
+    };
   }
 }
 
@@ -208,7 +225,7 @@ const quickSteps = [
   },
   {
     number: "03",
-    title: "60 秒冲榜",
+    title: "90 秒冲榜",
     copy: "一局结束马上结算，分数当天上榜。",
   },
 ];
@@ -218,6 +235,24 @@ export default async function HomePage() {
     getPreviewEntries(),
     getRandomHeroQuestion(),
   ]);
+  const classicDaily = previewEntries.classicDaily.map((entry) => ({
+    id: entry.id,
+    nickname: entry.nickname,
+    score: entry.score,
+    correctCount: entry.correctCount,
+    answeredCount: entry.answeredCount,
+    accuracy: entry.accuracy,
+    durationMs: entry.durationMs,
+  }));
+  const yearlyDaily = previewEntries.yearlyDaily.map((entry) => ({
+    id: entry.id,
+    nickname: entry.nickname,
+    score: entry.score,
+    correctCount: entry.correctCount,
+    answeredCount: entry.answeredCount,
+    accuracy: entry.accuracy,
+    durationMs: entry.durationMs,
+  }));
 
   const visualFrameSource = heroQuestion?.imageUrl ?? "/home/scene-golden-court.svg";
   const visualAnswer = heroQuestion?.answer ?? "等待题库导入";
@@ -233,11 +268,17 @@ export default async function HomePage() {
 
   return (
     <div className="home-page">
+      <HomeRankingDrawer
+        classicDaily={classicDaily}
+        yearlyDaily={yearlyDaily}
+        heartDaily={previewEntries.heartDaily}
+        starDaily={previewEntries.starDaily}
+      />
       <section className="landing-hero">
         <div className="landing-copy">
           <p className="landing-kicker">ANIME SCREENSHOT GUESS</p>
           <div className="landing-title-block">
-            <span className="landing-accent">60 秒冲榜</span>
+            <span className="landing-accent">90 秒冲榜</span>
             <h1 className="landing-title">
               <span>看一张截图</span>
               <span>立刻说出作品名</span>
@@ -305,43 +346,6 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section className="landing-ranking">
-        <div className="landing-section-head">
-          <div>
-            <p className="landing-section-label">今日排行榜</p>
-            <h2>今天谁冲得最快</h2>
-          </div>
-          <Link href="/leaderboard" className="landing-inline-link">
-            查看全部
-          </Link>
-        </div>
-
-        {previewEntries.length === 0 ? (
-          <p className="landing-empty">今天还没有成绩，先来拿下第一个上榜位。</p>
-        ) : (
-          <ol className="landing-ranking-list">
-            {previewEntries.map((entry, index) => (
-              <li key={entry.id} className="landing-ranking-item">
-                <span className="landing-rank-index">#{index + 1}</span>
-                <div className="landing-ranking-main">
-                  <strong>{entry.nickname}</strong>
-                  <span>
-                    {entry.correctCount}/{entry.answeredCount} · {formatPercent(entry.accuracy)}
-                  </span>
-                </div>
-                <div className="landing-ranking-score">
-                  <strong>{entry.score}</strong>
-                  <span>{(entry.durationMs / 1000).toFixed(1)}s</span>
-                </div>
-              </li>
-            ))}
-          </ol>
-        )}
-      </section>
-
-      <footer className="landing-footer">
-        <p>一局结束，马上再来。</p>
-      </footer>
     </div>
   );
 }

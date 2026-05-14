@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 type SubmitScoreFormProps = {
@@ -11,6 +12,22 @@ type SubmitScoreFormProps = {
   accuracy: number;
   onReplay: () => void;
 };
+
+function gradeFromAccuracy(accuracy: number, answeredCount: number) {
+  if (answeredCount === 0) {
+    return "READY";
+  }
+  if (accuracy >= 0.9) {
+    return "SS";
+  }
+  if (accuracy >= 0.75) {
+    return "S";
+  }
+  if (accuracy >= 0.55) {
+    return "A";
+  }
+  return "B";
+}
 
 export function SubmitScoreForm({
   sessionId,
@@ -25,6 +42,7 @@ export function SubmitScoreForm({
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const grade = gradeFromAccuracy(accuracy, answeredCount);
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -56,9 +74,19 @@ export function SubmitScoreForm({
   }
 
   return (
-    <section className="panel stack">
-      <span className="eyebrow">本局结算</span>
-      <div className="stat-grid">
+    <section className="panel stack score-submit-panel">
+      <div className="split-header split-header-top">
+        <div>
+          <span className="eyebrow">本局结算</span>
+          <h2 className="section-title review-title">提交昵称并上榜</h2>
+        </div>
+        <div className="score-stamp">
+          <strong>{grade}</strong>
+          <span>评级</span>
+        </div>
+      </div>
+
+      <div className="stat-grid result-stat-grid">
         <div className="score-card">
           <span className="muted">总分</span>
           <strong>{score}</strong>
@@ -81,19 +109,23 @@ export function SubmitScoreForm({
           <input
             id="nickname"
             name="nickname"
-            maxLength={20}
-            placeholder="例如：雾雨小队长"
+            maxLength={30}
+            placeholder="想到什么就取什么"
             value={nickname}
             onChange={(event) => setNickname(event.target.value)}
           />
+          <p className="field-hint">1 到 30 个字符即可，中文、标点、空格和表情都可以。</p>
         </div>
         <div className="toolbar">
           <button type="submit" className="button" disabled={isPending}>
             {isPending ? "提交中..." : "提交成绩"}
           </button>
-          <button type="button" className="button-ghost" onClick={onReplay}>
+          <button type="button" className="button-secondary" onClick={onReplay}>
             再来一局
           </button>
+          <Link href="/leaderboard" className="button-ghost">
+            查看排行
+          </Link>
         </div>
       </form>
 

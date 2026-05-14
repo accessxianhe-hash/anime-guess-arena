@@ -1,6 +1,6 @@
 import type { Difficulty } from "@prisma/client";
 
-export const GAME_DURATION_SECONDS = 60;
+export const GAME_DURATION_SECONDS = 90;
 export const YEARLY_GAME_DURATION_SECONDS = 90;
 export const YEARLY_CORRECT_SCORE = 10;
 export const YEARLY_SWITCH_YEAR_PROBABILITY = 0.7;
@@ -20,4 +20,4 @@ export const DIFFICULTY_POINTS: Record<Difficulty, number> = {
   HARD: 30,
 };
 
-export const NICKNAME_MAX_LENGTH = 20;
+export const NICKNAME_MAX_LENGTH = 30;

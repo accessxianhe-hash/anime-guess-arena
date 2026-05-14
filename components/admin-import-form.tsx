@@ -61,6 +61,8 @@ type ImportRuntimeProgress = {
 };
 
 const POLL_INTERVAL_MS = 2500;
+const CREATE_JOB_RECOVERY_DELAY_MS = 2500;
+const CREATE_JOB_RECOVERY_ATTEMPTS = 24;
 
 function formatDateTime(value: string | null) {
   if (!value) return "-";
@@ -137,6 +139,29 @@ function pickPayloadError(payload: { error?: string } | null | undefined) {
   return message.length > 0 ? message : null;
 }
 
+function delay(ms: number) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function normalizeArchiveName(value: string) {
+  return value.trim().replace(/\\/g, "/").replace(/^\/+/, "");
+}
+
+function isLikelyCreatedJob(
+  job: YearlyImportJob,
+  archiveName: string,
+  startedAtMs: number,
+) {
+  const createdAtMs = new Date(job.createdAt).getTime();
+  if (!Number.isFinite(createdAtMs)) return false;
+  return (
+    job.archiveName === archiveName &&
+    createdAtMs >= startedAtMs - 60_000
+  );
+}
+
 async function resolveHttpErrorMessage(
   response: Response,
   fallback: string,
@@ -176,6 +201,7 @@ export function AdminImportForm() {
   const [loadingJobs, setLoadingJobs] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [creatingFromServerPath, setCreatingFromServerPath] = useState(false);
+  const [creatingArchiveName, setCreatingArchiveName] = useState<string | null>(null);
   const [importingMetadata, setImportingMetadata] = useState(false);
   const [continuing, setContinuing] = useState(false);
   const [pausing, setPausing] = useState(false);
@@ -237,15 +263,44 @@ export function AdminImportForm() {
           }
           return nextJobs[0]?.id ?? null;
         });
+        return nextJobs;
       } catch (fetchError) {
         setError(
           fetchError instanceof Error ? fetchError.message : "获取导入任务列表失败",
         );
+        return null;
       } finally {
         setLoadingJobs(false);
       }
     },
     [],
+  );
+
+  const recoverCreatedJob = useCallback(
+    async (archiveName: string, startedAtMs: number) => {
+      for (let attempt = 0; attempt < CREATE_JOB_RECOVERY_ATTEMPTS; attempt += 1) {
+        if (attempt > 0) {
+          await delay(CREATE_JOB_RECOVERY_DELAY_MS);
+        }
+
+        const nextJobs = await fetchJobs(false);
+        const recovered = nextJobs?.find((job) =>
+          isLikelyCreatedJob(job, archiveName, startedAtMs),
+        );
+
+        if (recovered) {
+          setCurrentJobId(recovered.id);
+          setError("");
+          setMessage(
+            "Import job was created after the request timed out. It has been selected automatically.",
+          );
+          return recovered;
+        }
+      }
+
+      return null;
+    },
+    [fetchJobs],
   );
 
   const fetchJob = useCallback(
@@ -297,9 +352,15 @@ export function AdminImportForm() {
       return;
     }
 
+    const startedAtMs = Date.now();
+    const archiveName = archiveFile.name;
+
     setSubmitting(true);
+    setCreatingArchiveName(archiveName);
     setError("");
-    setMessage("");
+    setMessage(
+      `Creating import job for ${archiveName}. Large ZIP files can take a while; the task list will refresh automatically.`,
+    );
     try {
       const formData = new FormData();
       formData.append("archive", archiveFile);
@@ -319,11 +380,14 @@ export function AdminImportForm() {
       setMessage("导入任务已创建，可以继续导入。");
       setArchiveFile(null);
     } catch (createError) {
+      const recovered = await recoverCreatedJob(archiveName, startedAtMs);
+      if (recovered) return;
       setError(createError instanceof Error ? createError.message : "创建导入任务失败");
     } finally {
+      setCreatingArchiveName(null);
       setSubmitting(false);
     }
-  }, [archiveFile, upsertJob]);
+  }, [archiveFile, recoverCreatedJob, upsertJob]);
 
   const handleCreateJobFromServerPath = useCallback(async () => {
     const trimmedPath = serverArchivePath.trim();
@@ -332,9 +396,15 @@ export function AdminImportForm() {
       return;
     }
 
+    const startedAtMs = Date.now();
+    const archiveName = normalizeArchiveName(trimmedPath);
+
     setCreatingFromServerPath(true);
+    setCreatingArchiveName(archiveName);
     setError("");
-    setMessage("");
+    setMessage(
+      `Creating import job for ${archiveName}. The task list will refresh automatically.`,
+    );
     try {
       const response = await fetch("/api/admin/yearly-import/jobs/from-server-file", {
         method: "POST",
@@ -357,15 +427,18 @@ export function AdminImportForm() {
       setMessage("Server file import job created.");
       setServerArchivePath("");
     } catch (createError) {
+      const recovered = await recoverCreatedJob(archiveName, startedAtMs);
+      if (recovered) return;
       setError(
         createError instanceof Error
           ? createError.message
           : "Failed to create import job from server file",
       );
     } finally {
+      setCreatingArchiveName(null);
       setCreatingFromServerPath(false);
     }
-  }, [serverArchivePath, upsertJob]);
+  }, [recoverCreatedJob, serverArchivePath, upsertJob]);
 
   const handleImportMetadata = useCallback(async () => {
     if (!metadataFile) {
@@ -575,7 +648,7 @@ export function AdminImportForm() {
           className="cta-primary"
           type="button"
           onClick={handleCreateJob}
-          disabled={submitting}
+          disabled={submitting || !archiveFile}
         >
           {submitting ? "创建中..." : "创建导入任务"}
         </button>
@@ -730,6 +803,12 @@ export function AdminImportForm() {
         </div>
       </div>
 
+      {creatingArchiveName ? (
+        <div className="message">
+          Creating job for {creatingArchiveName}. If the upload gateway times out, this page
+          will keep checking whether the job was created.
+        </div>
+      ) : null}
       {error ? <div className="message error">{error}</div> : null}
       {message ? <div className="message success">{message}</div> : null}
 

@@ -67,6 +67,7 @@ type ClassicQuestionCard = BaseQuestionCard & {
 
 type YearlyQuestionCard = BaseQuestionCard & {
   mode: "YEARLY";
+  seriesId: string;
   year: number;
   options: string[];
 };
@@ -78,6 +79,17 @@ type AnswerResult = {
   isCorrect: boolean;
   scoreAwarded: number;
   skipped: boolean;
+};
+
+export type MistakeReviewItem = {
+  id: string;
+  mode: "CLASSIC" | "YEARLY";
+  imageUrl: string;
+  submittedAnswer: string;
+  acceptedAnswer: string;
+  skipped: boolean;
+  answeredAt: string;
+  year: number | null;
 };
 
 type GameSessionRecord = {
@@ -184,6 +196,7 @@ function mapYearlyQuestion(
   return {
     id: image.id,
     mode: "YEARLY",
+    seriesId: image.series.id,
     imageUrl: buildQuestionImageSrc(image.imageStorageKey, image.imageUrl),
     difficulty: Difficulty.MEDIUM,
     year: image.series.year,
@@ -369,39 +382,61 @@ async function pickYearlyImageByYear(
   year: number,
   excludeImageIds: string[],
 ) {
-  const rows = await client.yearlySeriesImage.findMany({
+  const imageWhere =
+    excludeImageIds.length > 0 ? { id: { notIn: excludeImageIds } } : {};
+
+  const seriesRows = await client.yearlySeries.findMany({
     where: {
-      id: excludeImageIds.length > 0 ? { notIn: excludeImageIds } : undefined,
-      series: {
-        active: true,
-        year,
-      },
-      attempts: {
-        none: {
-          sessionId,
-        },
+      active: true,
+      year,
+      images: {
+        some: imageWhere,
       },
     },
     select: {
       id: true,
-      imageUrl: true,
-      imageStorageKey: true,
-      series: {
+      year: true,
+      title: true,
+      normalizedTitle: true,
+      tags: true,
+      studios: true,
+      authors: true,
+      images: {
+        where: imageWhere,
         select: {
           id: true,
-          year: true,
-          title: true,
-          normalizedTitle: true,
-          tags: true,
-          studios: true,
-          authors: true,
+          imageUrl: true,
+          imageStorageKey: true,
         },
+        take: 24,
       },
     },
-    take: 60,
+    take: 120,
   });
 
-  return pickRandom(rows);
+  const pickedSeries = pickRandom(
+    seriesRows.filter((series) => series.images.length > 0),
+  );
+  const pickedImage = pickedSeries ? pickRandom(pickedSeries.images) : null;
+
+  if (!pickedSeries || !pickedImage) {
+    return null;
+  }
+
+  return {
+    id: pickedImage.id,
+    imageUrl: pickedImage.imageUrl,
+    imageStorageKey: pickedImage.imageStorageKey,
+    series: {
+      id: pickedSeries.id,
+      year: pickedSeries.year,
+      title: pickedSeries.title,
+      normalizedTitle: pickedSeries.normalizedTitle,
+      tags: pickedSeries.tags,
+      studios: pickedSeries.studios,
+      authors: pickedSeries.authors,
+    },
+  };
 }
 
 async function drawYearlyQuestion(
@@ -578,9 +613,11 @@ async function resolveClassicTurn(
   }
 
   const normalizedSubmittedAnswer = skipped ? "" : normalizeAnswer(submittedAnswer);
+  const normalizedCanonicalTitle = normalizeAnswer(question.canonicalTitle);
   const isCorrect =
     !skipped &&
     (normalizedSubmittedAnswer === question.normalizedCanonicalTitle ||
+      normalizedSubmittedAnswer === normalizedCanonicalTitle ||
       question.aliases.some((alias) => alias.normalizedAlias === normalizedSubmittedAnswer));
   const scoreAwarded = isCorrect ? calculateQuestionScore(question.difficulty) : 0;
   const reservedQuestionIds = Array.from(new Set([questionId, ...protectedQuestionIds]));
@@ -716,7 +753,11 @@ async function resolveYearlyTurn(
   }
 
   const normalizedSubmittedAnswer = skipped ? "" : normalizeAnswer(submittedAnswer);
-  const isCorrect = !skipped && normalizedSubmittedAnswer === image.series.normalizedTitle;
+  const normalizedSeriesTitle = normalizeAnswer(image.series.title);
+  const isCorrect =
+    !skipped &&
+    (normalizedSubmittedAnswer === image.series.normalizedTitle ||
+      normalizedSubmittedAnswer === normalizedSeriesTitle);
   const scoreAwarded = isCorrect ? YEARLY_CORRECT_SCORE : 0;
 
   try {
@@ -886,7 +927,9 @@ export async function submitAnswer(
   questionId: string,
   answer: string,
   protectedQuestionIds: string[],
+  protectedSeriesIds: string[] = [],
 ) {
+  void protectedSeriesIds;
   return resolveQuestionTurn(
     sessionId,
     questionId,
@@ -900,7 +943,9 @@ export async function skipQuestion(
   sessionId: string,
   questionId: string,
   protectedQuestionIds: string[],
+  protectedSeriesIds: string[] = [],
 ) {
+  void protectedSeriesIds;
   return resolveQuestionTurn(
     sessionId,
     questionId,
@@ -938,6 +983,66 @@ export async function finishGameSession(sessionId: string) {
 
     return buildSummary(finished);
   }, INTERACTIVE_TX_OPTIONS);
+}
+
+export async function listGameMistakes(sessionId: string): Promise<MistakeReviewItem[]> {
+  const attempts = await prisma.answerAttempt.findMany({
+    where: {
+      sessionId,
+      isCorrect: false,
+    },
+    orderBy: {
+      answeredAt: "asc",
+    },
+    include: {
+      question: {
+        select: {
+          canonicalTitle: true,
+          imageUrl: true,
+          imageStorageKey: true,
+        },
+      },
+      yearlySeries: {
+        select: {
+          title: true,
+          year: true,
+        },
+      },
+      yearlySeriesImage: {
+        select: {
+          imageUrl: true,
+          imageStorageKey: true,
+        },
+      },
+    },
+  });
+
+  return attempts.map((attempt) => {
+    const isYearly = attempt.mode === GameMode.YEARLY;
+    const acceptedAnswer = isYearly
+      ? (attempt.yearlySeries?.title ?? "")
+      : (attempt.question?.canonicalTitle ?? "");
+    const imageUrl = isYearly
+      ? buildQuestionImageSrc(
+          attempt.yearlySeriesImage?.imageStorageKey ?? null,
+          attempt.yearlySeriesImage?.imageUrl ?? "",
+        )
+      : buildQuestionImageSrc(
+          attempt.question?.imageStorageKey ?? null,
+          attempt.question?.imageUrl ?? "",
+        );
+
+    return {
+      id: attempt.id,
+      mode: isYearly ? "YEARLY" : "CLASSIC",
+      imageUrl,
+      submittedAnswer: attempt.submittedAnswer,
+      acceptedAnswer,
+      skipped: wasSkippedAttempt(attempt),
+      answeredAt: attempt.answeredAt.toISOString(),
+      year: attempt.yearlySeries?.year ?? null,
+    };
+  });
 }
 
 export async function submitLeaderboardEntry(sessionId: string, nickname: string) {

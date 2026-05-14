@@ -34,6 +34,128 @@ function Invoke-Step {
   }
 }
 
+function Stop-RepoNodeProcesses {
+  param([string]$RepoRoot)
+
+  $repoLower = $RepoRoot.ToLowerInvariant()
+  $stopped = 0
+
+  $nodeProcesses = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue
+  foreach ($proc in $nodeProcesses) {
+    $exe = $proc.ExecutablePath
+    $cmd = $proc.CommandLine
+    $belongsToRepo =
+      ($exe -and $exe.ToLowerInvariant().Contains($repoLower)) -or
+      ($cmd -and $cmd.ToLowerInvariant().Contains($repoLower))
+
+    if (-not $belongsToRepo) {
+      continue
+    }
+
+    try {
+      Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop
+      $stopped += 1
+    } catch {
+      # ignore and continue
+    }
+  }
+
+  return $stopped
+}
+
+function Clear-PrismaEngineTempFiles {
+  param([string]$RepoRoot)
+
+  $prismaClientDir = Join-Path $RepoRoot "node_modules\.prisma\client"
+  if (-not (Test-Path $prismaClientDir)) {
+    return
+  }
+
+  Get-ChildItem -Path $prismaClientDir -Filter "query_engine-windows.dll.node.tmp*" -File -ErrorAction SilentlyContinue |
+    ForEach-Object {
+      Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Invoke-PrismaGenerateStep {
+  param(
+    [string]$NpmPath,
+    [string]$RepoRoot
+  )
+
+  Write-Host "==> Generate Prisma Client"
+  & $NpmPath run prisma:generate
+  if ($LASTEXITCODE -eq 0) {
+    return
+  }
+
+  Write-Warning "Prisma generate failed with exit code $LASTEXITCODE. Attempting automatic recovery..."
+  $stopped = Stop-RepoNodeProcesses -RepoRoot $RepoRoot
+  if ($stopped -gt 0) {
+    Write-Warning "Stopped $stopped repo node process(es) that may hold Prisma engine locks."
+  }
+  Clear-PrismaEngineTempFiles -RepoRoot $RepoRoot
+  Start-Sleep -Seconds 1
+
+  Write-Host "==> Retry Prisma Client generation"
+  & $NpmPath run prisma:generate
+  if ($LASTEXITCODE -ne 0) {
+    throw "Generate Prisma Client failed with exit code $LASTEXITCODE."
+  }
+}
+
+function Test-PrismaMigrateStatus {
+  param(
+    [string]$NodePath,
+    [string]$RepoRoot,
+    [int]$MaxAttempts = 3
+  )
+
+  $prismaCliPath = Join-Path $RepoRoot "node_modules\prisma\build\index.js"
+  $schemaPath = Join-Path $RepoRoot "prisma\schema.prisma"
+  if (-not (Test-Path $prismaCliPath)) {
+    return $false
+  }
+
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+    & $NodePath $prismaCliPath migrate status --schema $schemaPath
+    if ($LASTEXITCODE -eq 0) {
+      return $true
+    }
+
+    if ($attempt -lt $MaxAttempts) {
+      Start-Sleep -Seconds 2
+    }
+  }
+
+  return $false
+}
+
+function Invoke-PrismaMigrateStep {
+  param(
+    [string]$NpmPath,
+    [string]$NodePath,
+    [string]$RepoRoot
+  )
+
+  Write-Host "==> Apply Prisma migrations"
+  & $NpmPath run prisma:migrate -- --skip-generate
+  $migrateExitCode = $LASTEXITCODE
+  if ($migrateExitCode -eq 0) {
+    return
+  }
+
+  # npm/prisma on Windows can occasionally return a non-zero code even when migration has completed.
+  Write-Warning "Prisma migrate returned exit code $migrateExitCode. Probing migration status..."
+  $statusOk = Test-PrismaMigrateStatus -NodePath $NodePath -RepoRoot $RepoRoot
+  if ($statusOk) {
+    Write-Warning "Migration status is healthy. Treating previous non-zero exit as transient and continuing."
+    return
+  }
+
+  throw "Apply Prisma migrations failed with exit code $migrateExitCode, and migrate status probe did not pass."
+}
+
 function Test-PgReady {
   param(
     [string]$PgHost,
@@ -156,10 +278,10 @@ if ($dbExists -ne "1") {
 }
 
 if (-not $devReady) {
-  Invoke-Step -Label "Generate Prisma Client" -Path $npmCmd -Arguments @("run", "prisma:generate")
+  Invoke-PrismaGenerateStep -NpmPath $npmCmd -RepoRoot $repoRoot
 }
 
-Invoke-Step -Label "Apply Prisma migrations" -Path $npmCmd -Arguments @("run", "prisma:migrate", "--", "--skip-generate")
+Invoke-PrismaMigrateStep -NpmPath $npmCmd -NodePath $nodeExe -RepoRoot $repoRoot
 Invoke-Step -Label "Seed demo data" -Path $npmCmd -Arguments @("run", "seed:dev")
 
 Write-Host ""

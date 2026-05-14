@@ -1,27 +1,78 @@
 import Link from "next/link";
 
-import { LeaderboardTable } from "@/components/leaderboard-table";
+import { LeaderboardBrowser } from "@/components/leaderboard-browser";
+import { getReactionLeaderboards } from "@/lib/challenge-reactions";
 import { getLeaderboard } from "@/lib/leaderboard";
 
 export const dynamic = "force-dynamic";
 
 async function loadBoards() {
   try {
-    const [classicDaily, classicAllTime, yearlyDaily, yearlyAllTime] = await Promise.all([
+    const [
+      classicDaily,
+      classicAllTime,
+      yearlyDaily,
+      yearlyAllTime,
+      reactionDaily,
+      reactionWeekly,
+    ] = await Promise.all([
       getLeaderboard("daily", "classic"),
       getLeaderboard("all_time", "classic"),
       getLeaderboard("daily", "yearly"),
       getLeaderboard("all_time", "yearly"),
+      getReactionLeaderboards("daily"),
+      getReactionLeaderboards("weekly"),
     ]);
 
-    return { classicDaily, classicAllTime, yearlyDaily, yearlyAllTime };
+    return {
+      classicDaily: classicDaily.map(toScoreEntry),
+      classicAllTime: classicAllTime.map(toScoreEntry),
+      yearlyDaily: yearlyDaily.map(toScoreEntry),
+      yearlyAllTime: yearlyAllTime.map(toScoreEntry),
+      reactionDaily,
+      reactionWeekly,
+    };
   } catch {
-    return { classicDaily: [], classicAllTime: [], yearlyDaily: [], yearlyAllTime: [] };
+    return {
+      classicDaily: [],
+      classicAllTime: [],
+      yearlyDaily: [],
+      yearlyAllTime: [],
+      reactionDaily: { scope: "daily" as const, hearts: [], stars: [] },
+      reactionWeekly: { scope: "weekly" as const, hearts: [], stars: [] },
+    };
   }
 }
 
+function toScoreEntry(entry: {
+  id: string;
+  nickname: string;
+  score: number;
+  correctCount: number;
+  answeredCount: number;
+  accuracy: number;
+  durationMs: number;
+}) {
+  return {
+    id: entry.id,
+    nickname: entry.nickname,
+    score: entry.score,
+    correctCount: entry.correctCount,
+    answeredCount: entry.answeredCount,
+    accuracy: entry.accuracy,
+    durationMs: entry.durationMs,
+  };
+}
+
 export default async function LeaderboardPage() {
-  const { classicDaily, classicAllTime, yearlyDaily, yearlyAllTime } = await loadBoards();
+  const {
+    classicDaily,
+    classicAllTime,
+    yearlyDaily,
+    yearlyAllTime,
+    reactionDaily,
+    reactionWeekly,
+  } = await loadBoards();
 
   return (
     <div className="stack page-stack">
@@ -43,32 +94,14 @@ export default async function LeaderboardPage() {
         </div>
       </section>
 
-      <div className="two-column">
-        <LeaderboardTable
-          title="经典模式 · 今日榜"
-          entries={classicDaily}
-          emptyLabel="今天经典模式还没有成绩，等你来拿下第一名。"
-        />
-        <LeaderboardTable
-          title="经典模式 · 总榜"
-          entries={classicAllTime}
-          emptyLabel="经典模式总榜暂时为空，完成一局后就会留下记录。"
-        />
-      </div>
-
-      <div className="two-column">
-        <LeaderboardTable
-          title="年份模式 · 今日榜"
-          entries={yearlyDaily}
-          emptyLabel="今天年份模式还没有成绩，快来冲榜。"
-        />
-        <LeaderboardTable
-          title="年份模式 · 总榜"
-          entries={yearlyAllTime}
-          emptyLabel="年份模式总榜暂时为空，完成一局后就会出现成绩。"
-        />
-      </div>
+      <LeaderboardBrowser
+        classicDaily={classicDaily}
+        classicAllTime={classicAllTime}
+        yearlyDaily={yearlyDaily}
+        yearlyAllTime={yearlyAllTime}
+        reactionDaily={reactionDaily}
+        reactionWeekly={reactionWeekly}
+      />
     </div>
   );
 }
-

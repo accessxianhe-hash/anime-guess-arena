@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { NICKNAME_MAX_LENGTH } from "@/lib/constants";
 
-const nicknameRegex = /^[\p{Script=Han}\p{Letter}\p{Number}_-]{2,20}$/u;
+const controlCharacterRegex = /[\p{Cc}\p{Cf}]/u;
 export const gameModeSchema = z.enum(["classic", "yearly"]).default("classic");
 
 export const startGameSchema = z
@@ -25,27 +25,37 @@ export const answerQuestionSchema = z.object({
   sessionId: z.string().min(1),
   questionId: z.string().min(1),
   answer: z.string().trim().min(1).max(120),
-  protectedQuestionIds: z.array(z.string().min(1)).max(12).optional().default([]),
+  protectedQuestionIds: z.array(z.string().min(1)).max(64).optional().default([]),
+  protectedSeriesIds: z.array(z.string().min(1)).max(64).optional().default([]),
 });
 
 export const skipQuestionSchema = z.object({
   sessionId: z.string().min(1),
   questionId: z.string().min(1),
-  protectedQuestionIds: z.array(z.string().min(1)).max(12).optional().default([]),
+  protectedQuestionIds: z.array(z.string().min(1)).max(64).optional().default([]),
+  protectedSeriesIds: z.array(z.string().min(1)).max(64).optional().default([]),
 });
 
 export const finishGameSchema = z.object({
   sessionId: z.string().min(1),
 });
 
+export const submitChallengeReactionsSchema = z.object({
+  sessionId: z.string().min(1),
+  likedSeriesIds: z.array(z.string().min(1)).max(64).default([]),
+  favoriteImageId: z.string().min(1).nullable().default(null),
+});
+
+export const reactionLeaderboardScopeSchema = z.enum(["daily", "weekly"]).default("daily");
+
 export const submitLeaderboardSchema = z.object({
   sessionId: z.string().min(1),
   nickname: z
     .string()
     .trim()
-    .min(2, "昵称至少 2 个字符")
+    .min(1, "昵称不能为空")
     .max(NICKNAME_MAX_LENGTH, `昵称不能超过 ${NICKNAME_MAX_LENGTH} 个字符`)
-    .regex(nicknameRegex, "昵称仅支持中文、字母、数字、下划线和短横线"),
+    .refine((value) => !controlCharacterRegex.test(value), "昵称不能包含不可见字符"),
 });
 
 export const leaderboardScopeSchema = z.enum(["daily", "all_time"]).default("daily");

@@ -29,6 +29,7 @@ export async function POST(request: NextRequest) {
       parsed.data.questionId,
       parsed.data.answer,
       parsed.data.protectedQuestionIds,
+      parsed.data.protectedSeriesIds,
     );
 
     logger.info("game.answer.success", {

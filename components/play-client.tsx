@@ -33,6 +33,7 @@ type ClassicQuestionCard = BaseQuestionCard & {
 
 type YearlyQuestionCard = BaseQuestionCard & {
   mode: "YEARLY";
+  seriesId: string;
   year: number;
   options: string[];
 };
@@ -40,12 +41,53 @@ type YearlyQuestionCard = BaseQuestionCard & {
 type QuestionCard = ClassicQuestionCard | YearlyQuestionCard;
 type CurrentQuestion = QuestionCard | null;
 
-type FeedbackState = {
+type MistakeReviewItem = {
+  id: string;
+  mode: "CLASSIC" | "YEARLY";
+  imageUrl: string;
+  submittedAnswer: string;
   acceptedAnswer: string;
-  isCorrect: boolean;
-  scoreAwarded: number;
   skipped: boolean;
-} | null;
+  answeredAt: string;
+  year: number | null;
+};
+
+type ChallengeSeriesOption = {
+  id: string;
+  kind: "classic" | "yearly";
+  title: string;
+  year: number | null;
+};
+
+type ChallengeImageOption = {
+  id: string;
+  kind: "classic" | "yearly";
+  seriesId: string;
+  title: string;
+  year: number | null;
+  imageUrl: string;
+};
+
+type ChallengeReactionOptions = {
+  series: ChallengeSeriesOption[];
+  images: ChallengeImageOption[];
+  selectedSeriesIds: string[];
+  selectedImageId: string | null;
+};
+
+type ReactionLeaderboardEntry = {
+  id: string;
+  title: string;
+  year: number | null;
+  imageUrl?: string;
+  count: number;
+};
+
+type ReactionLeaderboards = {
+  scope: "daily" | "weekly";
+  hearts: ReactionLeaderboardEntry[];
+  stars: ReactionLeaderboardEntry[];
+};
 
 type TurnTask = {
   path: "/api/game/answer" | "/api/game/skip";
@@ -57,16 +99,44 @@ type TurnTask = {
   previousOption: string;
 };
 
-const MIN_FEEDBACK_MS = 90;
 const NEXT_QUESTION_DELAY_MS = 0;
-const IMAGE_READY_FALLBACK_MS = 1200;
-const PREFETCH_LOOKAHEAD_COUNT = 3;
+const IMAGE_LOAD_TIMEOUT_MS = 8_000;
+const PREFETCH_LOOKAHEAD_COUNT = 4;
+const TURN_REQUEST_TIMEOUT_MS = 10_000;
+type ImageFetchPriority = "high" | "low" | "auto";
 
 const difficultyText = {
   EASY: "简单",
   MEDIUM: "普通",
   HARD: "困难",
 } as const;
+
+function formatClock(ms: number | null) {
+  const totalSeconds = Math.max(0, Math.ceil((ms ?? 0) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatTagText(tag: string) {
+  return tag.startsWith("year-") ? tag.replace("year-", "") : tag;
+}
+
+function gradeFromAccuracy(accuracy: number, answeredCount: number) {
+  if (answeredCount === 0) {
+    return "READY";
+  }
+  if (accuracy >= 0.9) {
+    return "SS";
+  }
+  if (accuracy >= 0.75) {
+    return "S";
+  }
+  if (accuracy >= 0.55) {
+    return "A";
+  }
+  return "B";
+}
 
 export function PlayClient() {
   const [selectedMode, setSelectedMode] = useState<"classic" | "yearly">("classic");
@@ -84,21 +154,42 @@ export function PlayClient() {
 
   const [answer, setAnswer] = useState("");
   const [selectedOption, setSelectedOption] = useState("");
-  const [feedback, setFeedback] = useState<FeedbackState>(null);
   const [error, setError] = useState<string | null>(null);
   const [isBooting, setIsBooting] = useState(false);
   const [pendingTurnCount, setPendingTurnCount] = useState(0);
+  const [submittingQuestionId, setSubmittingQuestionId] = useState<string | null>(null);
+  const [mistakes, setMistakes] = useState<MistakeReviewItem[]>([]);
+  const [isLoadingMistakes, setIsLoadingMistakes] = useState(false);
+  const [reactionOptions, setReactionOptions] = useState<ChallengeReactionOptions | null>(
+    null,
+  );
+  const [selectedReactionSeriesIds, setSelectedReactionSeriesIds] = useState<string[]>(
+    [],
+  );
+  const [selectedReactionImageId, setSelectedReactionImageId] = useState<string | null>(
+    null,
+  );
+  const [reactionBoards, setReactionBoards] = useState<{
+    daily: ReactionLeaderboards | null;
+    weekly: ReactionLeaderboards | null;
+  }>({ daily: null, weekly: null });
+  const [reactionError, setReactionError] = useState<string | null>(null);
+  const [reactionSaving, setReactionSaving] = useState(false);
 
   const finishTriggeredRef = useRef(false);
   const advanceTimerRef = useRef<number | null>(null);
-  const feedbackTimerRef = useRef<number | null>(null);
   const imageFallbackTimerRef = useRef<number | null>(null);
   const loadedImageCacheRef = useRef<Set<string>>(new Set());
   const failedImageCacheRef = useRef<Set<string>>(new Set());
-  const inflightImageLoadsRef = useRef<Map<string, Promise<void>>>(new Map());
+  const inflightImageLoadsRef = useRef<Map<string, Promise<boolean>>>(new Map());
   const processedQuestionIdsRef = useRef<Set<string>>(new Set());
+  const blockedQuestionIdsRef = useRef<Set<string>>(new Set());
   const submissionQueueRef = useRef<Promise<void>>(Promise.resolve());
   const currentQuestionIdRef = useRef<string | null>(null);
+  const questionQueueRef = useRef<QuestionCard[]>([]);
+  const advancePastUnusableQuestionRef = useRef<(question: QuestionCard) => void>(
+    () => {},
+  );
 
   const remainingMs = useCountdown(
     session?.expiresAt ?? null,
@@ -115,13 +206,6 @@ export function PlayClient() {
     }
   }
 
-  function clearFeedbackTimer() {
-    if (feedbackTimerRef.current !== null) {
-      window.clearTimeout(feedbackTimerRef.current);
-      feedbackTimerRef.current = null;
-    }
-  }
-
   function clearImageFallbackTimer() {
     if (imageFallbackTimerRef.current !== null) {
       window.clearTimeout(imageFallbackTimerRef.current);
@@ -131,7 +215,6 @@ export function PlayClient() {
 
   function resetRuntimeState() {
     setError(null);
-    setFeedback(null);
     setAnswer("");
     setSelectedOption("");
     setQuestion(null);
@@ -141,72 +224,37 @@ export function PlayClient() {
     setDisplayedImageQuestionId(null);
     setIsQuestionImageReady(false);
     setPendingTurnCount(0);
+    setSubmittingQuestionId(null);
+    setMistakes([]);
+    setIsLoadingMistakes(false);
+    setReactionOptions(null);
+    setSelectedReactionSeriesIds([]);
+    setSelectedReactionImageId(null);
+    setReactionBoards({ daily: null, weekly: null });
+    setReactionError(null);
+    setReactionSaving(false);
     processedQuestionIdsRef.current.clear();
+    blockedQuestionIdsRef.current.clear();
     finishTriggeredRef.current = false;
     clearAdvanceTimer();
-    clearFeedbackTimer();
     clearImageFallbackTimer();
     submissionQueueRef.current = Promise.resolve();
   }
 
-  function scheduleFeedbackReset() {
-    clearFeedbackTimer();
-    feedbackTimerRef.current = window.setTimeout(() => {
-      setFeedback(null);
-      feedbackTimerRef.current = null;
-    }, MIN_FEEDBACK_MS);
-  }
-
-  function findReadyQuestionIndex(
-    queue: QuestionCard[],
-    ignoreQuestionId: string | null = null,
-  ) {
-    return queue.findIndex((queuedQuestion) => {
-      if (ignoreQuestionId && queuedQuestion.id === ignoreQuestionId) {
-        return false;
-      }
-      return loadedImageCacheRef.current.has(queuedQuestion.imageUrl);
-    });
-  }
-
-  const promoteReadyQuestion = useCallback((ignoreQuestionId: string | null = null) => {
-    let promoted = false;
-
-    setQuestionQueue((currentQueue) => {
-      const readyIndex = findReadyQuestionIndex(currentQueue, ignoreQuestionId);
-      if (readyIndex < 0) {
-        return currentQueue;
-      }
-
-      const nextQueue = [...currentQueue];
-      const [readyQuestion] = nextQueue.splice(readyIndex, 1);
-      if (!readyQuestion) {
-        return currentQueue;
-      }
-
-      promoted = true;
-      setQuestion(readyQuestion);
-      setDisplayedImageSrc(readyQuestion.imageUrl);
-      setDisplayedImageQuestionId(readyQuestion.id);
-      setIsQuestionImageReady(true);
-
-      return nextQueue;
-    });
-
-    return promoted;
-  }, []);
-
-  function primeImage(src: string | null | undefined) {
+  const primeImage = useCallback((
+    src: string | null | undefined,
+    fetchPriority: ImageFetchPriority = "high",
+  ) => {
     if (!src) {
-      return Promise.resolve();
+      return Promise.resolve(false);
     }
 
     if (loadedImageCacheRef.current.has(src)) {
-      return Promise.resolve();
+      return Promise.resolve(true);
     }
 
     if (failedImageCacheRef.current.has(src)) {
-      return Promise.resolve();
+      return Promise.resolve(false);
     }
 
     const inflightRequest = inflightImageLoadsRef.current.get(src);
@@ -214,10 +262,10 @@ export function PlayClient() {
       return inflightRequest;
     }
 
-    const request = new Promise<void>((resolve) => {
+    const request = new Promise<boolean>((resolve) => {
       const image = new window.Image();
       try {
-        image.fetchPriority = "high";
+        image.fetchPriority = fetchPriority;
       } catch {}
 
       image.decoding = "async";
@@ -230,24 +278,35 @@ export function PlayClient() {
 
         loadedImageCacheRef.current.add(src);
         inflightImageLoadsRef.current.delete(src);
-        resolve();
+        resolve(true);
       };
       image.onerror = () => {
         failedImageCacheRef.current.add(src);
         inflightImageLoadsRef.current.delete(src);
-        resolve();
+        resolve(false);
       };
       image.src = src;
     });
 
     inflightImageLoadsRef.current.set(src, request);
     return request;
-  }
+  }, []);
+
+  const primeQueuedImages = useCallback(async (queue: QuestionCard[]) => {
+    for (const queuedQuestion of queue.slice(0, PREFETCH_LOOKAHEAD_COUNT)) {
+      if (processedQuestionIdsRef.current.has(queuedQuestion.id)) {
+        continue;
+      }
+      if (blockedQuestionIdsRef.current.has(queuedQuestion.id)) {
+        continue;
+      }
+      await primeImage(queuedQuestion.imageUrl, "low");
+    }
+  }, [primeImage]);
 
   useEffect(() => {
     return () => {
       clearAdvanceTimer();
-      clearFeedbackTimer();
       clearImageFallbackTimer();
     };
   }, []);
@@ -255,6 +314,10 @@ export function PlayClient() {
   useEffect(() => {
     currentQuestionIdRef.current = question?.id ?? null;
   }, [question?.id]);
+
+  useEffect(() => {
+    questionQueueRef.current = questionQueue;
+  }, [questionQueue]);
 
   useEffect(() => {
     let cancelled = false;
@@ -295,48 +358,69 @@ export function PlayClient() {
     }
 
     const nextImageSrc = question.imageUrl;
-    let cancelled = false;
+    const nextQuestionId = question.id;
 
     if (loadedImageCacheRef.current.has(nextImageSrc)) {
       setDisplayedImageSrc(nextImageSrc);
-      setDisplayedImageQuestionId(question.id);
+      setDisplayedImageQuestionId(nextQuestionId);
       setIsQuestionImageReady(true);
       return;
     }
 
     setDisplayedImageSrc(null);
-    setDisplayedImageQuestionId(null);
+    setDisplayedImageQuestionId(nextQuestionId);
     setIsQuestionImageReady(false);
 
-    void primeImage(nextImageSrc).then(() => {
-      if (cancelled) {
-        return;
-      }
-      if (loadedImageCacheRef.current.has(nextImageSrc)) {
-        setDisplayedImageSrc(nextImageSrc);
-        setDisplayedImageQuestionId(question.id);
-        setIsQuestionImageReady(true);
+    let cancelled = false;
+    void primeImage(nextImageSrc).then((loaded) => {
+      if (cancelled || currentQuestionIdRef.current !== nextQuestionId) {
         return;
       }
 
-      if (failedImageCacheRef.current.has(nextImageSrc)) {
-        setDisplayedImageSrc(null);
-        setDisplayedImageQuestionId(null);
-        setIsQuestionImageReady(false);
-        promoteReadyQuestion(question.id);
+      if (!loaded) {
+        advancePastUnusableQuestionRef.current(question);
+        return;
       }
+
+      setDisplayedImageSrc(nextImageSrc);
+      setDisplayedImageQuestionId(nextQuestionId);
+      setIsQuestionImageReady(true);
     });
 
     return () => {
       cancelled = true;
     };
-  }, [question?.id, question?.imageUrl, promoteReadyQuestion]);
+  }, [primeImage, question]);
 
   useEffect(() => {
-    questionQueue.slice(0, PREFETCH_LOOKAHEAD_COUNT).forEach((queuedQuestion) => {
-      void primeImage(queuedQuestion.imageUrl);
-    });
-  }, [questionQueue]);
+    advancePastUnusableQuestionRef.current = advancePastUnusableQuestion;
+  });
+
+  useEffect(() => {
+    if (!question?.imageUrl || isQuestionImageReady) {
+      clearImageFallbackTimer();
+      return;
+    }
+
+    clearImageFallbackTimer();
+    const timedQuestion = question;
+    imageFallbackTimerRef.current = window.setTimeout(() => {
+      imageFallbackTimerRef.current = null;
+      advancePastUnusableQuestionRef.current(timedQuestion);
+    }, IMAGE_LOAD_TIMEOUT_MS);
+
+    return () => {
+      clearImageFallbackTimer();
+    };
+  }, [isQuestionImageReady, question]);
+
+  useEffect(() => {
+    if (!isQuestionImageReady) {
+      return;
+    }
+
+    void primeQueuedImages(questionQueue);
+  }, [isQuestionImageReady, primeQueuedImages, questionQueue]);
 
   useEffect(() => {
     if (!session || session.status !== "ACTIVE") {
@@ -378,6 +462,189 @@ export function PlayClient() {
     };
   }, [session]);
 
+  const isCurrentQuestionSubmitting =
+    Boolean(question) && submittingQuestionId === question?.id;
+  const sessionId = session?.sessionId ?? null;
+  const sessionStatus = session?.status ?? null;
+  const remainingSeconds = Math.ceil((remainingMs ?? 0) / 1000);
+  const isFinalSeconds = session?.status === "ACTIVE" && remainingSeconds <= 10;
+  const totalDurationMs =
+    session?.expiresAt && session?.startedAt
+      ? Math.max(
+          1,
+          new Date(session.expiresAt).getTime() - new Date(session.startedAt).getTime(),
+        )
+      : 1;
+  const timerProgress = Math.max(
+    0,
+    Math.min(100, ((remainingMs ?? totalDurationMs) / totalDurationMs) * 100),
+  );
+
+  useEffect(() => {
+    if (!sessionId || sessionStatus === "ACTIVE") {
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingMistakes(true);
+
+    void (async () => {
+      try {
+        const response = await fetch("/api/game/review", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          return;
+        }
+        if (!cancelled) {
+          setMistakes((payload.mistakes ?? []) as MistakeReviewItem[]);
+        }
+      } catch {
+      } finally {
+        if (!cancelled) {
+          setIsLoadingMistakes(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, sessionStatus]);
+
+  const loadReactionBoards = useCallback(async () => {
+    const [dailyResponse, weeklyResponse] = await Promise.all([
+      fetch("/api/reaction-leaderboard?scope=daily", { cache: "no-store" }),
+      fetch("/api/reaction-leaderboard?scope=weekly", { cache: "no-store" }),
+    ]);
+    const [daily, weekly] = await Promise.all([
+      dailyResponse.json(),
+      weeklyResponse.json(),
+    ]);
+
+    setReactionBoards({
+      daily: dailyResponse.ok ? (daily as ReactionLeaderboards) : null,
+      weekly: weeklyResponse.ok ? (weekly as ReactionLeaderboards) : null,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!sessionId || sessionStatus === "ACTIVE") {
+      return;
+    }
+
+    let cancelled = false;
+    setReactionError(null);
+
+    void (async () => {
+      try {
+        const response = await fetch("/api/game/reactions/options", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error ?? "Failed to load challenge reactions.");
+        }
+
+        if (!cancelled) {
+          const options = payload as ChallengeReactionOptions;
+          setReactionOptions(options);
+          setSelectedReactionSeriesIds(options.selectedSeriesIds);
+          setSelectedReactionImageId(options.selectedImageId);
+        }
+
+        await loadReactionBoards();
+      } catch (loadError) {
+        if (!cancelled) {
+          setReactionError(
+            loadError instanceof Error
+              ? loadError.message
+              : "Failed to load challenge reactions.",
+          );
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loadReactionBoards, sessionId, sessionStatus]);
+
+  async function saveChallengeReactions(
+    likedSeriesIds: string[],
+    favoriteImageId: string | null,
+  ) {
+    if (!sessionId || reactionSaving) {
+      return;
+    }
+
+    setReactionSaving(true);
+    setReactionError(null);
+    try {
+      const response = await fetch("/api/game/reactions/vote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId,
+          likedSeriesIds,
+          favoriteImageId,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to save challenge reactions.");
+      }
+
+      const options = payload as ChallengeReactionOptions;
+      setReactionOptions(options);
+      setSelectedReactionSeriesIds(options.selectedSeriesIds);
+      setSelectedReactionImageId(options.selectedImageId);
+      await loadReactionBoards();
+    } catch (saveError) {
+      setReactionError(
+        saveError instanceof Error ? saveError.message : "Failed to save challenge reactions.",
+      );
+    } finally {
+      setReactionSaving(false);
+    }
+  }
+
+  function toggleChallengeHeart(seriesId: string) {
+    const nextSeriesIds = selectedReactionSeriesIds.includes(seriesId)
+      ? selectedReactionSeriesIds.filter((id) => id !== seriesId)
+      : [...selectedReactionSeriesIds, seriesId];
+
+    setSelectedReactionSeriesIds(nextSeriesIds);
+    void saveChallengeReactions(nextSeriesIds, selectedReactionImageId);
+  }
+
+  function selectChallengeStar(imageId: string) {
+    const nextImageId = selectedReactionImageId === imageId ? null : imageId;
+    setSelectedReactionImageId(nextImageId);
+    void saveChallengeReactions(selectedReactionSeriesIds, nextImageId);
+  }
+
+  function skipChallengeHearts() {
+    setSelectedReactionSeriesIds([]);
+    void saveChallengeReactions([], selectedReactionImageId);
+  }
+
+  function skipChallengeStar() {
+    setSelectedReactionImageId(null);
+    void saveChallengeReactions(selectedReactionSeriesIds, null);
+  }
+
+  function skipChallengeReactions() {
+    setSelectedReactionSeriesIds([]);
+    setSelectedReactionImageId(null);
+    void saveChallengeReactions([], null);
+  }
+
   async function startRound() {
     setIsBooting(true);
     resetRuntimeState();
@@ -401,7 +668,8 @@ export function PlayClient() {
 
       setSession(payload.session);
       setQuestion(payload.question);
-      setQuestionQueue((payload.queuedQuestions ?? []) as QuestionCard[]);
+      const queuedQuestions = (payload.queuedQuestions ?? []) as QuestionCard[];
+      setQuestionQueue(queuedQuestions);
       setIsBooting(false);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "无法开始挑战。");
@@ -421,7 +689,17 @@ export function PlayClient() {
   function queueNextQuestion(nextQuestion: CurrentQuestion, remainingQueue: QuestionCard[]) {
     clearAdvanceTimer();
     clearImageFallbackTimer();
-    setQuestionQueue(remainingQueue);
+    const sanitizedQueue = remainingQueue.filter((queuedQuestion) => {
+      if (processedQuestionIdsRef.current.has(queuedQuestion.id)) {
+        return false;
+      }
+      if (blockedQuestionIdsRef.current.has(queuedQuestion.id)) {
+        return false;
+      }
+      return !nextQuestion || queuedQuestion.id !== nextQuestion.id;
+    });
+
+    setQuestionQueue(sanitizedQueue);
     setDisplayedImageSrc(null);
     setDisplayedImageQuestionId(null);
     setIsQuestionImageReady(false);
@@ -431,68 +709,75 @@ export function PlayClient() {
       advanceTimerRef.current = window.setTimeout(() => {
         setQuestion(null);
         advanceTimerRef.current = null;
-      }, MIN_FEEDBACK_MS);
+      }, 0);
       return;
     }
-
-    void primeImage(nextQuestion.imageUrl);
 
     advanceTimerRef.current = window.setTimeout(() => {
       setQuestion(nextQuestion);
       advanceTimerRef.current = null;
     }, NEXT_QUESTION_DELAY_MS);
 
-    imageFallbackTimerRef.current = window.setTimeout(() => {
-      if (currentQuestionIdRef.current !== nextQuestion.id) {
-        imageFallbackTimerRef.current = null;
-        return;
+    void primeImage(nextQuestion.imageUrl, "high");
+  }
+
+  function advancePastUnusableQuestion(unusableQuestion: QuestionCard) {
+    if (currentQuestionIdRef.current !== unusableQuestion.id) {
+      return;
+    }
+    if (processedQuestionIdsRef.current.has(unusableQuestion.id)) {
+      return;
+    }
+
+    blockedQuestionIdsRef.current.add(unusableQuestion.id);
+    failedImageCacheRef.current.add(unusableQuestion.imageUrl);
+    setAnswer("");
+    setSelectedOption("");
+    setError(null);
+
+    const availableQueue = questionQueueRef.current.filter((queuedQuestion) => {
+      if (queuedQuestion.id === unusableQuestion.id) {
+        return false;
       }
-
-      if (loadedImageCacheRef.current.has(nextQuestion.imageUrl)) {
-        imageFallbackTimerRef.current = null;
-        return;
+      if (processedQuestionIdsRef.current.has(queuedQuestion.id)) {
+        return false;
       }
+      return !blockedQuestionIdsRef.current.has(queuedQuestion.id);
+    });
+    const immediateNextQuestion = availableQueue[0] ?? null;
 
-      setQuestionQueue((currentQueue) => {
-        const queueWithRetry = currentQueue.some(
-          (queuedQuestion) => queuedQuestion.id === nextQuestion.id,
-        )
-          ? [...currentQueue]
-          : [...currentQueue, nextQuestion];
+    if (immediateNextQuestion) {
+      queueNextQuestion(immediateNextQuestion, availableQueue.slice(1));
+      return;
+    }
 
-        const readyIndex = findReadyQuestionIndex(queueWithRetry, nextQuestion.id);
-        if (readyIndex < 0) {
-          return queueWithRetry;
-        }
-
-        const [readyQuestion] = queueWithRetry.splice(readyIndex, 1);
-        if (!readyQuestion) {
-          return queueWithRetry;
-        }
-
-        setQuestion(readyQuestion);
-        setDisplayedImageSrc(readyQuestion.imageUrl);
-        setDisplayedImageQuestionId(readyQuestion.id);
-        setIsQuestionImageReady(true);
-
-        return queueWithRetry;
-      });
-
-      imageFallbackTimerRef.current = null;
-    }, IMAGE_READY_FALLBACK_MS);
+    submitTurn("", true);
   }
 
   async function processTurn(task: TurnTask) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      controller.abort();
+    }, TURN_REQUEST_TIMEOUT_MS);
+
     try {
       const response = await fetch(task.path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(task.body),
+        signal: controller.signal,
       });
 
       const payload = await response.json();
       if (!response.ok) {
-        setError(payload.error ?? "处理当前题目失败，请稍后再试。");
+        const message = payload.error ?? "处理当前题目失败，请稍后再试。";
+        if (currentQuestionIdRef.current === task.previousQuestion?.id || !currentQuestionIdRef.current) {
+          setError(message);
+        }
+        processedQuestionIdsRef.current.delete(task.previousQuestion?.id ?? "");
+        setSubmittingQuestionId((currentId) =>
+          currentId === task.previousQuestion?.id ? null : currentId,
+        );
         clearImageFallbackTimer();
         clearAdvanceTimer();
 
@@ -513,25 +798,51 @@ export function PlayClient() {
       }
 
       setSession(payload.session);
-      if (payload.result) {
-        setFeedback(payload.result);
-        scheduleFeedbackReset();
-      }
-
       if (payload.session.status !== "ACTIVE") {
         queueNextQuestion(null, []);
         return;
       }
 
-      if (payload.queuedQuestion?.imageUrl) {
-        void primeImage(payload.queuedQuestion.imageUrl);
+      const queuedQuestion = (payload.queuedQuestion ?? null) as CurrentQuestion;
+
+      if (queuedQuestion && processedQuestionIdsRef.current.has(queuedQuestion.id)) {
+        return;
       }
-      setQuestionQueue((currentQueue) =>
-        payload.queuedQuestion ? [...currentQueue, payload.queuedQuestion] : currentQueue,
-      );
+
+      if (queuedQuestion && !task.immediateNextQuestion) {
+        queueNextQuestion(queuedQuestion, []);
+        return;
+      }
+
+      setQuestionQueue((currentQueue) => {
+        if (!queuedQuestion) {
+          return currentQueue;
+        }
+        if (currentQueue.some((currentQuestion) => currentQuestion.id === queuedQuestion.id)) {
+          return currentQueue;
+        }
+        return [...currentQueue, queuedQuestion];
+      });
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "提交失败，请重试。");
+      const message =
+        requestError instanceof DOMException && requestError.name === "AbortError"
+          ? "提交超时，请重试。"
+          : requestError instanceof Error
+            ? requestError.message
+            : "提交失败，请重试。";
+
+      if (currentQuestionIdRef.current === task.previousQuestion?.id || !currentQuestionIdRef.current) {
+        setError(message);
+      }
+      processedQuestionIdsRef.current.delete(task.previousQuestion?.id ?? "");
+      setSubmittingQuestionId((currentId) =>
+        currentId === task.previousQuestion?.id ? null : currentId,
+      );
     } finally {
+      window.clearTimeout(timeoutId);
+      setSubmittingQuestionId((currentId) =>
+        currentId === task.previousQuestion?.id ? null : currentId,
+      );
       setPendingTurnCount((count) => Math.max(0, count - 1));
     }
   }
@@ -550,17 +861,49 @@ export function PlayClient() {
     if (processedQuestionIdsRef.current.has(question.id)) {
       return;
     }
+    if (submittingQuestionId === question.id) {
+      return;
+    }
 
     processedQuestionIdsRef.current.add(question.id);
+    setSubmittingQuestionId(question.id);
     setError(null);
 
     const previousQuestion = question;
-    const immediateNextQuestion = questionQueue[0] ?? null;
-    const remainingQueue = questionQueue.slice(1);
-    const protectedQuestionIds = questionQueue.map((queuedQuestion) => queuedQuestion.id);
+    const availableQueue = questionQueue.filter((queuedQuestion) => {
+      if (queuedQuestion.id === question.id) {
+        return false;
+      }
+      if (processedQuestionIdsRef.current.has(queuedQuestion.id)) {
+        return false;
+      }
+      return !blockedQuestionIdsRef.current.has(queuedQuestion.id);
+    });
+    const immediateNextQuestion = availableQueue[0] ?? null;
+    const remainingQueue = availableQueue.slice(1);
+    const protectedQuestionIds = Array.from(
+      new Set([
+        ...blockedQuestionIdsRef.current,
+        ...availableQueue.map((queuedQuestion) => queuedQuestion.id),
+      ]),
+    );
+    const protectedSeriesIds = availableQueue
+      .filter(
+        (queuedQuestion): queuedQuestion is YearlyQuestionCard =>
+          queuedQuestion.mode === "YEARLY",
+      )
+      .map((queuedQuestion) => queuedQuestion.seriesId);
 
     if (immediateNextQuestion) {
       queueNextQuestion(immediateNextQuestion, remainingQueue);
+    } else {
+      clearAdvanceTimer();
+      clearImageFallbackTimer();
+      setQuestion(null);
+      setDisplayedImageSrc(null);
+      setDisplayedImageQuestionId(null);
+      setIsQuestionImageReady(false);
+      setSelectedOption("");
     }
 
     enqueueTurn({
@@ -570,12 +913,14 @@ export function PlayClient() {
             sessionId: session.sessionId,
             questionId: previousQuestion.id,
             protectedQuestionIds,
+            protectedSeriesIds,
           }
         : {
             sessionId: session.sessionId,
             questionId: previousQuestion.id,
             answer: submittedAnswer,
             protectedQuestionIds,
+            protectedSeriesIds,
           },
       immediateNextQuestion,
       remainingQueue,
@@ -624,22 +969,22 @@ export function PlayClient() {
 
   if (!session) {
     return (
-      <section className="panel stack">
+      <section className="panel stack start-panel">
         <span className="eyebrow">模式选择</span>
         <h1 className="section-title">选择玩法并开始挑战</h1>
-        <p className="muted">经典模式保持自由输入；年份模式支持多选年份并四选一答题。</p>
+        <p className="muted">90 秒内连续看图作答。先选题库模式，再开始冲榜。</p>
 
-        <div className="toolbar" style={{ justifyContent: "flex-start", gap: 10 }}>
+        <div className="segmented-control" aria-label="选择玩法模式">
           <button
             type="button"
-            className={selectedMode === "classic" ? "button" : "button-ghost"}
+            className={selectedMode === "classic" ? "segment active" : "segment"}
             onClick={() => setSelectedMode("classic")}
           >
             经典模式
           </button>
           <button
             type="button"
-            className={selectedMode === "yearly" ? "button" : "button-ghost"}
+            className={selectedMode === "yearly" ? "segment active" : "segment"}
             onClick={() => setSelectedMode("yearly")}
           >
             年份模式
@@ -674,10 +1019,10 @@ export function PlayClient() {
 
         {error ? <div className="message error">{error}</div> : null}
 
-        <div className="toolbar">
+        <div className="toolbar start-actions">
           <button
             type="button"
-            className="button"
+            className="button button-primary-large"
             onClick={() => void startRound()}
             disabled={selectedMode === "yearly" && !canStartYearly}
           >
@@ -689,14 +1034,21 @@ export function PlayClient() {
   }
 
   if (session.status !== "ACTIVE") {
+    const finalGrade = gradeFromAccuracy(summary?.accuracy ?? 0, summary?.answeredCount ?? 0);
     return (
       <div className="stack" style={{ gap: 24 }}>
-        <section className="panel">
-          <span className="eyebrow">挑战结束</span>
-          <h1 className="hero-title hero-title-compact">本局已结束，看看你能不能冲上榜。</h1>
-          <p className="hero-copy">
-            倒计时归零或题库抽完后会自动结算。你可以提交成绩，也可以直接再来一局。
-          </p>
+        <section className="panel result-hero">
+          <div>
+            <span className="eyebrow">挑战结束</span>
+            <h1 className="hero-title hero-title-compact">本局已结算。</h1>
+            <p className="hero-copy">
+              {summary?.correctCount ?? 0} 题命中，正确率 {Math.round((summary?.accuracy ?? 0) * 100)}%。提交成绩后可以冲击排行榜。
+            </p>
+          </div>
+          <div className="result-grade" aria-label={`本局评级 ${finalGrade}`}>
+            <span>{finalGrade}</span>
+            <small>RANK</small>
+          </div>
         </section>
         <SubmitScoreForm
           sessionId={session.sessionId}
@@ -706,6 +1058,167 @@ export function PlayClient() {
           accuracy={summary?.accuracy ?? 0}
           onReplay={() => void startRound()}
         />
+        <section className="panel stack challenge-reactions-panel">
+          <div className="split-header">
+            <div>
+              <span className="eyebrow">After Party</span>
+              <h2 className="section-title review-title">本局最喜欢的番剧和截图</h2>
+            </div>
+            {reactionSaving ? <span className="pill">保存中</span> : <span className="pill">每日 / 每周榜</span>}
+          </div>
+
+          {reactionError ? <div className="message error">{reactionError}</div> : null}
+
+          {reactionOptions ? (
+            <div className="reaction-skip-row">
+              <span className="muted">跳过后，本局不会新增爱心或星星。</span>
+              <button
+                type="button"
+                className="button-secondary"
+                onClick={skipChallengeReactions}
+                disabled={reactionSaving}
+              >
+                跳过本环节
+              </button>
+            </div>
+          ) : null}
+
+          {!reactionOptions ? (
+            <div className="empty-state">正在整理本局出现过的番剧...</div>
+          ) : reactionOptions.series.length === 0 ? (
+            <div className="empty-state">本局没有可投票的年份题目。</div>
+          ) : (
+            <>
+              <div className="stack" style={{ gap: 12 }}>
+                <div>
+                  <h3 className="reaction-heading">你喜欢本局出现的哪些番剧？</h3>
+                  <p className="muted">可以多选，点小红心会立即计入今日榜和本周榜。</p>
+                </div>
+                <div className="reaction-section-actions">
+                  <button
+                    type="button"
+                    className="button-secondary"
+                    onClick={skipChallengeHearts}
+                    disabled={reactionSaving}
+                  >
+                    跳过爱心
+                  </button>
+                </div>
+                <div className="reaction-series-grid">
+                  {reactionOptions.series.map((item) => {
+                    const active = selectedReactionSeriesIds.includes(item.id);
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className={active ? "reaction-chip active" : "reaction-chip"}
+                        onClick={() => toggleChallengeHeart(item.id)}
+                        disabled={reactionSaving}
+                      >
+                        <span className="reaction-icon">♥</span>
+                        <span>{item.title}</span>
+                        <small>{item.year ?? "经典"}</small>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="stack" style={{ gap: 12 }}>
+                <div>
+                  <h3 className="reaction-heading">本局你最喜欢哪一张截图？</h3>
+                  <p className="muted">只能选择一张，点小星星会更新你的选择。</p>
+                </div>
+                <div className="reaction-section-actions">
+                  <button
+                    type="button"
+                    className="button-secondary"
+                    onClick={skipChallengeStar}
+                    disabled={reactionSaving}
+                  >
+                    跳过星星
+                  </button>
+                </div>
+                <div className="reaction-image-grid">
+                  {reactionOptions.images.map((item) => {
+                    const active = selectedReactionImageId === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className={active ? "reaction-image-card active" : "reaction-image-card"}
+                        onClick={() => selectChallengeStar(item.id)}
+                        disabled={reactionSaving}
+                      >
+                        <span className="reaction-star">★</span>
+                        <img src={item.imageUrl} alt={`${item.title} 截图`} loading="lazy" />
+                        <strong>{item.title}</strong>
+                        <small>{item.year ?? "经典题库"}</small>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="reaction-board-grid">
+                <ReactionBoard title="小红心 今日榜" entries={reactionBoards.daily?.hearts ?? []} />
+                <ReactionBoard title="小红心 本周榜" entries={reactionBoards.weekly?.hearts ?? []} />
+                <ReactionBoard title="小星星 今日榜" entries={reactionBoards.daily?.stars ?? []} showImages />
+                <ReactionBoard title="小星星 本周榜" entries={reactionBoards.weekly?.stars ?? []} showImages />
+              </div>
+            </>
+          )}
+        </section>
+        <section className="panel stack">
+          <div className="split-header">
+            <div>
+              <span className="eyebrow">错题回顾</span>
+              <h2 className="section-title review-title">本局答错的题</h2>
+            </div>
+            <span className="pill">{mistakes.length} 题</span>
+          </div>
+
+          {isLoadingMistakes ? (
+            <div className="empty-state">正在整理错题...</div>
+          ) : mistakes.length === 0 ? (
+            <div className="message success">本局没有错题，保持住。</div>
+          ) : (
+            <div className="mistake-list">
+              {mistakes.map((item, index) => (
+                <article key={item.id} className="mistake-card">
+                  <div className="mistake-image">
+                    {item.imageUrl ? (
+                      <img src={item.imageUrl} alt="错题截图" loading="lazy" />
+                    ) : (
+                      <span>无题图</span>
+                    )}
+                  </div>
+                  <div className="mistake-body">
+                    <div className="label-row">
+                      <span className="pill">#{index + 1}</span>
+                      <span className="pill">
+                        {item.mode === "YEARLY" ? "年份模式" : "经典模式"}
+                      </span>
+                      {item.year ? <span className="pill">{item.year}</span> : null}
+                    </div>
+                    <div className="mistake-answer-grid">
+                      <div>
+                        <span className="muted">你的答案</span>
+                        <strong className="mistake-wrong">
+                          {item.skipped ? "跳过" : item.submittedAnswer || "未填写"}
+                        </strong>
+                      </div>
+                      <div>
+                        <span className="muted">正确答案</span>
+                        <strong>{item.acceptedAnswer || "未知"}</strong>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
       </div>
     );
   }
@@ -714,27 +1227,30 @@ export function PlayClient() {
     <div className="play-layout">
       <section className="panel stack play-stage-panel">
         <div className="split-header split-header-top">
-          <div>
+          <div className="play-stage-copy">
             <span className="eyebrow">进行中</span>
-            <h1 className="section-title play-stage-title">看图、答题、继续下一题。</h1>
+            <h1 className="section-title play-stage-title">
+              <span>看图答题</span>
+            </h1>
+            <p className="play-stage-subtitle">盯住截图，选出作品名；时间会持续倒计。</p>
+            <div className="mobile-mini-score">
+              得分 {summary?.score ?? 0} · 答对 {summary?.correctCount ?? 0}
+            </div>
           </div>
-          <div className="countdown">剩余 {Math.ceil((remainingMs ?? 0) / 1000)} 秒</div>
+          <div className={isFinalSeconds ? "countdown countdown-danger" : "countdown"}>
+            <span>TIME</span>
+            <strong>{formatClock(remainingMs)}</strong>
+            <div className="countdown-track" aria-hidden="true">
+              <div
+                className="countdown-bar"
+                style={{ width: `${timerProgress}%` }}
+              />
+            </div>
+          </div>
         </div>
 
         {question ? (
           <>
-            <div className="play-preload-strip" aria-hidden="true">
-              {questionQueue.slice(0, PREFETCH_LOOKAHEAD_COUNT).map((queuedQuestion, index) => (
-                <img
-                  key={`preload-${queuedQuestion.id}`}
-                  src={queuedQuestion.imageUrl}
-                  alt=""
-                  loading="eager"
-                  decoding="async"
-                  fetchPriority={index === 0 ? "high" : "low"}
-                />
-              ))}
-            </div>
             <div className={`play-image ${!isQuestionImageReady ? "play-image-loading" : ""}`}>
               {displayedImageSrc && displayedImageQuestionId === question.id ? (
                 <img
@@ -743,42 +1259,46 @@ export function PlayClient() {
                   alt="动画截图题目"
                   loading="eager"
                   decoding="async"
+                  fetchPriority="high"
+                  onLoad={() => {
+                    loadedImageCacheRef.current.add(displayedImageSrc);
+                    clearImageFallbackTimer();
+                    setIsQuestionImageReady(true);
+                  }}
+                  onError={() => {
+                    failedImageCacheRef.current.add(displayedImageSrc);
+                    setDisplayedImageSrc(null);
+                    setDisplayedImageQuestionId(null);
+                    setIsQuestionImageReady(false);
+                    advancePastUnusableQuestion(question);
+                  }}
                 />
               ) : (
                 <div className="play-image-placeholder">
-                  <span>正在加载下一张题图...</span>
+                  <span>正在加载题图，超过 8 秒会自动换题...</span>
                 </div>
               )}
             </div>
             <div className="label-row">
               <span className="pill">难度: {difficultyText[question.difficulty]}</span>
               {question.mode === "YEARLY" ? <span className="pill">年份: {question.year}</span> : null}
-              {question.tags.map((tag) => (
-                <span key={tag} className="tag">
-                  {tag}
-                </span>
-              ))}
+              <div className="secondary-tag-row" aria-label="题目标签">
+                {question.tags
+                  .filter((tag) => !tag.startsWith("year-"))
+                  .slice(0, 6)
+                  .map((tag) => (
+                    <span key={tag} className="tag">
+                      {formatTagText(tag)}
+                    </span>
+                  ))}
+              </div>
             </div>
           </>
         ) : (
-          <div className="empty-state">正在切到下一题...</div>
-        )}
-
-        {feedback ? (
-          <div className={`feedback-card ${feedback.isCorrect ? "ok" : "error"}`}>
-            <strong>
-              {feedback.skipped ? "已跳过本题" : feedback.isCorrect ? "回答正确" : "回答错误"}
-            </strong>
-            <p className="muted">
-              正确答案: {feedback.acceptedAnswer}
-              {feedback.skipped
-                ? "，已切换下一题。"
-                : feedback.isCorrect
-                  ? `，本题 +${feedback.scoreAwarded} 分。`
-                  : "，继续冲下一题。"}
-            </p>
+          <div className="empty-state">
+            {submittingQuestionId ? "正在提交答案并抽取下一题..." : "正在切到下一题..."}
           </div>
-        ) : null}
+        )}
 
         {error ? <div className="message error">{error}</div> : null}
 
@@ -793,10 +1313,9 @@ export function PlayClient() {
                     <button
                       key={option}
                       type="button"
-                      className={active ? "button" : "button-ghost"}
-                      style={{ justifyContent: "flex-start", textAlign: "left" }}
+                      className={active ? "answer-option active" : "answer-option"}
                       onClick={() => setSelectedOption(option)}
-                      disabled={!question}
+                      disabled={!question || isCurrentQuestionSubmitting}
                     >
                       {option}
                     </button>
@@ -808,12 +1327,17 @@ export function PlayClient() {
               <button
                 type="button"
                 className="button"
-                disabled={!question || !selectedOption}
+                disabled={!question || !selectedOption || isCurrentQuestionSubmitting}
                 onClick={handleYearlySubmit}
               >
-                提交答案
+                {isCurrentQuestionSubmitting ? "提交中..." : "提交答案"}
               </button>
-              <button type="button" className="button-ghost" disabled={!question} onClick={handleSkip}>
+              <button
+                type="button"
+                className="button-secondary"
+                disabled={!question || isCurrentQuestionSubmitting}
+                onClick={handleSkip}
+              >
                 跳过本题
               </button>
             </div>
@@ -828,14 +1352,23 @@ export function PlayClient() {
                 placeholder="例如: 海贼王"
                 value={answer}
                 onChange={(event) => setAnswer(event.target.value)}
-                disabled={!question}
+                disabled={!question || isCurrentQuestionSubmitting}
               />
             </div>
             <div className="toolbar">
-              <button type="submit" className="button" disabled={!question || !answer.trim()}>
-                提交答案
+              <button
+                type="submit"
+                className="button"
+                disabled={!question || !answer.trim() || isCurrentQuestionSubmitting}
+              >
+                {isCurrentQuestionSubmitting ? "提交中..." : "提交答案"}
               </button>
-              <button type="button" className="button-ghost" disabled={!question} onClick={handleSkip}>
+              <button
+                type="button"
+                className="button-secondary"
+                disabled={!question || isCurrentQuestionSubmitting}
+                onClick={handleSkip}
+              >
                 跳过本题
               </button>
             </div>
@@ -868,21 +1401,61 @@ export function PlayClient() {
 
         <section className="panel stack">
           <span className="eyebrow">规则提示</span>
-          <div className="feature-card">
-            <h3>经典模式</h3>
-            <p className="muted">自由输入作品名，支持别名匹配，按难度计分。</p>
-          </div>
-          <div className="feature-card">
-            <h3>年份模式</h3>
-            <p className="muted">每题都从你勾选年份里抽取，并提供四个选项。</p>
-          </div>
-          <div className="feature-card">
-            <h3>跳过规则</h3>
-            <p className="muted">可直接跳题，跳过不计入答题总数，也不扣分。</p>
-          </div>
+          <ul className="rule-list">
+            <li>
+              <strong>经典模式</strong>
+              <span>自由输入作品名，支持别名匹配，按难度计分。</span>
+            </li>
+            <li>
+              <strong>年份模式</strong>
+              <span>每题都从你勾选年份里抽取，并提供四个选项。</span>
+            </li>
+            <li>
+              <strong>跳过规则</strong>
+              <span>可直接跳题，跳过不计入答题总数，也不扣分。</span>
+            </li>
+          </ul>
         </section>
       </aside>
     </div>
+  );
+}
+
+function ReactionBoard({
+  title,
+  entries,
+  showImages = false,
+}: {
+  title: string;
+  entries: ReactionLeaderboardEntry[];
+  showImages?: boolean;
+}) {
+  return (
+    <article className="reaction-board">
+      <div className="reaction-board-head">
+        <h3>{title}</h3>
+        <span>{entries.length} 项</span>
+      </div>
+      {entries.length === 0 ? (
+        <div className="reaction-board-empty">还没有投票</div>
+      ) : (
+        <ol className="reaction-board-list">
+          {entries.map((entry, index) => (
+            <li key={entry.id}>
+              <span className="reaction-rank">#{index + 1}</span>
+              {showImages && entry.imageUrl ? (
+                <img src={entry.imageUrl} alt={`${entry.title} 截图`} loading="lazy" />
+              ) : null}
+              <div>
+                <strong>{entry.title}</strong>
+                <small>{entry.year ?? "经典题库"}</small>
+              </div>
+              <span className="reaction-count">{entry.count}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </article>
   );
 }
 

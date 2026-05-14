@@ -28,6 +28,7 @@ export async function POST(request: NextRequest) {
       parsed.data.sessionId,
       parsed.data.questionId,
       parsed.data.protectedQuestionIds,
+      parsed.data.protectedSeriesIds,
     );
 
     logger.info("game.skip.success", {

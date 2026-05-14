@@ -30,7 +30,10 @@ export function LeaderboardTable({
       </div>
 
       {entries.length === 0 ? (
-        <div className="empty-state">{emptyLabel}</div>
+        <div className="empty-state">
+          <div className="empty-state-icon" aria-hidden="true">NO DATA</div>
+          <span>{emptyLabel}</span>
+        </div>
       ) : (
         <div style={{ overflowX: "auto" }}>
           <table className="table">

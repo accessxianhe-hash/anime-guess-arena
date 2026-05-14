@@ -66,6 +66,8 @@ model Question {
   updatedAt                DateTime        @updatedAt
   aliases                  QuestionAlias[]
   attempts                 AnswerAttempt[]
+  heartVotes               SeriesHeartVote[] @relation("QuestionHeartVotes")
+  starVotes                ImageStarVote[]   @relation("QuestionStarVotes")
 
   @@index([active, difficulty])
 }
@@ -96,6 +98,8 @@ model GameSession {
   submittedAt      DateTime?
   attempts         AnswerAttempt[]
   leaderboardEntry LeaderboardEntry[]
+  seriesHeartVotes SeriesHeartVote[]
+  imageStarVote    ImageStarVote?
 
   @@index([status, expiresAt])
 }
@@ -159,6 +163,8 @@ model YearlySeries {
   updatedAt       DateTime            @updatedAt
   images          YearlySeriesImage[]
   attempts        AnswerAttempt[]
+  heartVotes      SeriesHeartVote[]
+  starVotes       ImageStarVote[]
 
   @@unique([year, normalizedTitle])
   @@index([year, active])
@@ -175,6 +181,7 @@ model YearlySeriesImage {
   createdAt      DateTime       @default(now())
   series         YearlySeries   @relation(fields: [seriesId], references: [id], onDelete: Cascade)
   attempts       AnswerAttempt[]
+  starVotes      ImageStarVote[]
 
   @@unique([seriesId, fileHash])
   @@index([seriesId])
@@ -217,4 +224,48 @@ model YearlyImportItem {
 
   @@unique([jobId, itemIndex])
   @@index([jobId, status, itemIndex])
+}
+
+model SeriesHeartVote {
+  id             String       @id @default(cuid())
+  sessionId      String
+  questionId     String?
+  yearlySeriesId String?
+  dateKey        String
+  weekKey        String
+  createdAt      DateTime     @default(now())
+  session        GameSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  question       Question?    @relation("QuestionHeartVotes", fields: [questionId], references: [id], onDelete: Cascade)
+  yearlySeries   YearlySeries? @relation(fields: [yearlySeriesId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, yearlySeriesId])
+  @@unique([sessionId, questionId])
+  @@index([dateKey, createdAt])
+  @@index([weekKey, createdAt])
+  @@index([questionId, dateKey])
+  @@index([questionId, weekKey])
+  @@index([yearlySeriesId, dateKey])
+  @@index([yearlySeriesId, weekKey])
+}
+
+model ImageStarVote {
+  id                  String            @id @default(cuid())
+  sessionId           String            @unique
+  questionId          String?
+  yearlySeriesId      String?
+  yearlySeriesImageId String?
+  dateKey             String
+  weekKey             String
+  createdAt           DateTime          @default(now())
+  session             GameSession       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  question            Question?         @relation("QuestionStarVotes", fields: [questionId], references: [id], onDelete: Cascade)
+  yearlySeries        YearlySeries?     @relation(fields: [yearlySeriesId], references: [id], onDelete: Cascade)
+  yearlySeriesImage   YearlySeriesImage? @relation(fields: [yearlySeriesImageId], references: [id], onDelete: Cascade)
+
+  @@index([dateKey, createdAt])
+  @@index([weekKey, createdAt])
+  @@index([questionId, dateKey])
+  @@index([questionId, weekKey])
+  @@index([yearlySeriesImageId, dateKey])
+  @@index([yearlySeriesImageId, weekKey])
 }

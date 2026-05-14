@@ -5,7 +5,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "番图冲刺",
-  description: "看截图，猜作品名，60 秒冲榜。",
+  description: "看截图，猜作品名，90 秒冲榜。",
 };
 
 export default function RootLayout({
