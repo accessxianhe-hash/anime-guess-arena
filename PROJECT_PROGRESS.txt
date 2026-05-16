@@ -1,0 +1,174 @@
+anime-guess-arena 项目进度备忘录
+更新时间：2026-05-16
+
+用途
+- 这个文件用于给后续新对话快速同步项目现状。
+- 新进度应建立在旧进度基础上更新；允许把已经过时的旧进度替换为当前事实。
+- 修改范围应尽量写清楚：本地文件、服务器路径、是否已部署、是否需要用户手动操作。
+
+半自动更新规则
+- 以后默认按半自动方式维护本文件。
+- 需要自动更新的情况：
+  1. 修改了代码、脚本、配置或文档，并且这些改动会影响后续接手。
+  2. 完成了正式服务器部署、同步文件、重建容器、健康检查或服务器清理。
+  3. 确认了域名、DNS、服务器路径、部署方式、脚本版本、外部服务状态等关键事实。
+  4. 用户明确要求记录某个决策、结论或排查结果。
+- 不自动写入的情况：
+  1. 临时排查过程、未验证猜测、一次性命令输出。
+  2. 很小且不会影响后续接手的聊天结论。
+  3. 已经被后续结论覆盖的中间状态。
+- 更新方式：
+  1. 优先替换过时内容，不无限追加流水账。
+  2. 新增内容要写清楚“本地是否已改”“服务器是否已同步”“是否需要用户手动操作”。
+  3. 每次更新后把“更新时间”改成当前日期。
+- 安全规则：
+  1. 不记录密码、Token、Cookie、完整数据库连接串、私钥内容。
+  2. SSH 命令可以记录到 key 文件路径级别，但不记录私钥内容。
+  3. 如果必须描述敏感配置，只写用途和位置，不写具体密钥值。
+
+代码改动提交说明规则
+- 以后每次有代码、脚本、配置或重要文档改动时，默认给用户提供中文提交说明。
+- 提交说明至少包含：
+  1. Summary：一句话标题，适合填 GitHub Desktop 的 Summary 输入框。
+  2. Description：分点说明主要改动、部署/验证状态、需要用户手动操作的事项。
+- Summary 应简短具体，优先描述用户可感知结果，不写空泛词。
+- Description 不写无关排查细节，不写敏感信息。
+- 如果一批改动包含多个功能，应合并成一个清晰主题；必要时建议用户分多次提交。
+
+项目位置
+- 本地项目：E:\anime-guess-arena
+- 正式站点：https://anime.accessxianhe.online/
+- 生产服务器：111.231.65.205
+- SSH：ssh -i C:\Users\仙鹤\.ssh\tencent_anime ubuntu@111.231.65.205
+- 服务器项目路径：/opt/anime-guess-arena/app
+- Docker compose 根目录：/opt/anime-guess-arena
+- Web 服务：anime-web
+- Caddy 反代：127.0.0.1:3100 -> 3000
+- 健康检查：https://anime.accessxianhe.online/api/health
+
+部署原则
+- 不要部署到 Vercel；正式站点不是 Vercel。
+- 网站前台/接口代码改动需要同步到服务器并执行：
+  cd /opt/anime-guess-arena && docker compose up -d --build anime-web
+- 单独的 Tampermonkey 用户脚本如果只在 scripts/ 下，不一定需要重建 Docker；需要看它是否被 public 或页面路由引用。
+- 部署后至少检查：
+  curl -fsS -m 10 https://anime.accessxianhe.online/api/health
+
+DNS / 域名现状
+- accessxianhe.online 当前 NS 是阿里云/万网：
+  dns29.hichina.com
+  dns30.hichina.com
+- DNSPod 邮件提示的清理项是 DNSPod 内未实际使用的解析配置。
+- 当前 anime.accessxianhe.online 解析到 111.231.65.205。
+- 清理 DNSPod 中未使用的 accessxianhe.online 解析配置，按当前状态不会影响网站访问。
+
+本地开发
+- 曾启动过本地 dev server：http://localhost:3002/play
+- 本机普通 PATH 里可能没有 git/npm；Node 可用路径曾使用：
+  C:\Users\仙鹤\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin
+- Next 构建命令示例：
+  $env:PATH='C:\Users\仙鹤\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin;' + $env:PATH
+  .\node_modules\.bin\next.cmd build
+
+近期网站已完成改动
+1. 答题页 UI 文案
+- app/play/page.tsx
+  开场标题改为“90 秒识别赛 / READY”语义，避免“赛”单独换行和“继续下一题”遮挡。
+- components/play-client.tsx
+  答题区标题去掉“继续下一题”，只保留“看图答题”语义。
+- app/globals.css
+  做过小范围排版调整，避免顶部/浮层遮挡题图。
+- 已部署到正式服务器。
+
+2. 提交成绩后的反馈引导
+- components/submit-score-form.tsx
+  提交成绩后不立即回主页；保留结果页，引导点心心和星星。
+  提供倒计时自动回首页、手动返回首页、再玩一次。
+  倒计时不影响心心/星星选择。
+- app/globals.css
+  增加相关样式。
+- 已部署到正式服务器。
+
+3. 排行榜分页
+- lib/constants.ts
+  LEADERBOARD_LIMIT = 100
+  LEADERBOARD_PAGE_SIZE = 20
+  LEADERBOARD_COMPACT_LIMIT = 20
+- app/api/leaderboard/route.ts
+  支持 limit 参数。
+- app/api/reaction-leaderboard/route.ts
+  支持 limit 参数。
+- components/leaderboard-browser.tsx
+  今日榜和总榜前 100，20 名一页分页。
+- components/leaderboard-table.tsx
+  增加 startRank，翻页后名次连续。
+- components/play-client.tsx
+  结算页小互动榜限制为 20。
+- app/globals.css
+  增加分页样式。
+- 已部署到正式服务器。
+
+4. 心心/星星响应速度
+- components/play-client.tsx
+  心心/星星保存改为乐观 UI。
+  按钮不再因为保存请求而禁用。
+  后台队列只提交最新选择，当前请求完成后再发下一次。
+- 已部署到正式服务器。
+
+Bangumi 抓图器 / 爬虫脚本
+- 脚本文件：scripts\bangumi-subject-image-export.user.js
+- 文档：docs\bangumi-image-export.md
+- 这是 Tampermonkey 用户脚本，不是网站前台页面功能。
+- 当前脚本版本：0.1.6
+- 服务器同步路径：/opt/anime-guess-arena/app/scripts/bangumi-subject-image-export.user.js
+- 服务器已同步到 0.1.6，但浏览器里已安装的 Tampermonkey 脚本不会自动更新，用户需要在 Tampermonkey 管理面板手动替换脚本内容。
+
+Bangumi 脚本近期改动
+1. “收录并移除”响应优化
+- 点击后立即从面板列表移除卡片。
+- 后台继续执行图片下载、哈希、写文件和 manifest 更新。
+- 成功后提示已手动收录。
+- 失败时把原卡片放回过滤列表，并记录错误。
+
+2. “最近被过滤”面板性能优化
+- 不能只保留最近 80 条，因为会导致早先过滤图被覆盖，后面无法手动收录。
+- 当前实现是全部保留过滤记录，但分页显示。
+- 每页显示 80 条。
+- 面板提供“上一页 / 下一页”。
+- 目标：不丢筛图候选，同时避免一次渲染过多卡片导致面板变慢。
+
+3. 脚本验证
+- 已执行 node --check scripts\bangumi-subject-image-export.user.js 通过。
+- 服务器 grep 验证过版本号 0.1.6 和分页逻辑存在。
+
+Bangumi 临时图片 URL
+- 曾上传/同步过 4 张 Bangumi 临时图片：
+  /public/bangumi-temp/bangumi-20260514-1.png
+  /public/bangumi-temp/bangumi-20260514-2.png
+  /public/bangumi-temp/bangumi-20260514-3.png
+  /public/bangumi-temp/bangumi-20260514-4.png
+- 线上路径应为：
+  https://anime.accessxianhe.online/bangumi-temp/bangumi-20260514-1.png
+  https://anime.accessxianhe.online/bangumi-temp/bangumi-20260514-2.png
+  https://anime.accessxianhe.online/bangumi-temp/bangumi-20260514-3.png
+  https://anime.accessxianhe.online/bangumi-temp/bangumi-20260514-4.png
+
+服务器清理记录
+- 已清理 Docker BuildKit 构建缓存。
+- 已删除旧迁移包 tgz。
+- 不要误删数据库卷、MinIO 数据卷、uploads、imports、题库 zip、metadata CSV。
+
+重要约束
+- 不要新建项目。
+- 不要改无关功能。
+- 不要动题库导入、数据库、后台逻辑，除非用户明确要求。
+- 不要改 2025 题库 zip 或元数据 CSV，除非用户明确要求。
+- 有现存改动时不要回滚用户改动。
+- 涉及正式站点时优先部署到 https://anime.accessxianhe.online/ 对应服务器，而不是 Vercel。
+
+后续接手建议
+1. 先读本文件。
+2. 再读相关代码文件。
+3. 如涉及部署，先确认改动是否属于网站运行时代码还是本地脚本/文档。
+4. 网站代码改动后构建、同步服务器、重建 anime-web、健康检查。
+5. Tampermonkey 脚本改动后，本地 node --check，并同步服务器脚本副本；提醒用户手动更新浏览器脚本。

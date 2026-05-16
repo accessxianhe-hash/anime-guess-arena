@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { LeaderboardTable } from "@/components/leaderboard-table";
 import type { ReactionLeaderboardEntry } from "@/lib/challenge-reactions";
@@ -47,6 +47,8 @@ type ImagePreview = {
   title: string;
 };
 
+const LEADERBOARD_PAGE_SIZE = 20;
+
 function scopeLabel(scope: ScoreScope | ReactionScope) {
   if (scope === "daily") return "今日榜";
   if (scope === "weekly") return "本周榜";
@@ -58,12 +60,14 @@ function ReactionLeaderboardDetail({
   entries,
   showImages = false,
   emptyLabel,
+  startRank = 1,
   onPreviewImage,
 }: {
   title: string;
   entries: ReactionLeaderboardEntry[];
   showImages?: boolean;
   emptyLabel: string;
+  startRank?: number;
   onPreviewImage?: (preview: ImagePreview) => void;
 }) {
   return (
@@ -84,7 +88,9 @@ function ReactionLeaderboardDetail({
         <ol className={showImages ? "reaction-detail-list with-images" : "reaction-detail-list"}>
           {entries.map((entry, index) => (
             <li key={entry.id}>
-              <span className={`rank-badge rank-${Math.min(index + 1, 4)}`}>#{index + 1}</span>
+              <span className={`rank-badge rank-${Math.min(startRank + index, 4)}`}>
+                #{startRank + index}
+              </span>
               {showImages && entry.imageUrl ? (
                 <button
                   type="button"
@@ -108,6 +114,64 @@ function ReactionLeaderboardDetail({
         </ol>
       )}
     </section>
+  );
+}
+
+function PaginationControls({
+  currentPage,
+  totalPages,
+  totalCount,
+  pageSize,
+  onPageChange,
+}: {
+  currentPage: number;
+  totalPages: number;
+  totalCount: number;
+  pageSize: number;
+  onPageChange: (page: number) => void;
+}) {
+  if (totalPages <= 1) {
+    return (
+      <div className="leaderboard-page-summary">
+        共 {totalCount} 名，显示前 {Math.min(totalCount, pageSize)} 名
+      </div>
+    );
+  }
+
+  const pages = Array.from({ length: totalPages }, (_, index) => index + 1);
+  return (
+    <div className="leaderboard-pagination" aria-label="排行榜分页">
+      <span>
+        共 {totalCount} 名 · 每页 {pageSize} 名
+      </span>
+      <div>
+        <button
+          type="button"
+          onClick={() => onPageChange(Math.max(1, currentPage - 1))}
+          disabled={currentPage === 1}
+        >
+          上一页
+        </button>
+        {pages.map((page) => (
+          <button
+            key={page}
+            type="button"
+            className={page === currentPage ? "active" : ""}
+            onClick={() => onPageChange(page)}
+            aria-current={page === currentPage ? "page" : undefined}
+          >
+            {page}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
+          disabled={currentPage === totalPages}
+        >
+          下一页
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -155,14 +219,11 @@ export function LeaderboardBrowser({
   const [activeCategoryId, setActiveCategoryId] = useState<BoardCategoryId>("yearly");
   const [scoreScope, setScoreScope] = useState<ScoreScope>("daily");
   const [reactionScope, setReactionScope] = useState<ReactionScope>("daily");
+  const [currentPage, setCurrentPage] = useState(1);
   const [previewImage, setPreviewImage] = useState<ImagePreview | null>(null);
 
   const activeCategory =
-    categories.find((category) => category.id === activeCategoryId) ?? categories[0];
-
-  if (!activeCategory) {
-    return null;
-  }
+    categories.find((category) => category.id === activeCategoryId) ?? categories[0]!;
 
   const isScoreBoard = activeCategory.kind === "score";
   const activeScope = isScoreBoard ? scoreScope : reactionScope;
@@ -185,6 +246,30 @@ export function LeaderboardBrowser({
       : reactionScope === "daily"
         ? reactionDaily.stars
         : reactionWeekly.stars;
+
+  const activeEntriesCount = isScoreBoard ? scoreEntries.length : reactionEntries.length;
+  const totalPages = Math.max(1, Math.ceil(activeEntriesCount / LEADERBOARD_PAGE_SIZE));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const pageStartIndex = (safeCurrentPage - 1) * LEADERBOARD_PAGE_SIZE;
+  const pageStartRank = pageStartIndex + 1;
+  const pagedScoreEntries = scoreEntries.slice(
+    pageStartIndex,
+    pageStartIndex + LEADERBOARD_PAGE_SIZE,
+  );
+  const pagedReactionEntries = reactionEntries.slice(
+    pageStartIndex,
+    pageStartIndex + LEADERBOARD_PAGE_SIZE,
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [activeCategoryId, scoreScope, reactionScope]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   const emptyLabel = isScoreBoard
     ? scoreScope === "daily"
@@ -271,16 +356,30 @@ export function LeaderboardBrowser({
         </div>
 
         {isScoreBoard ? (
-          <LeaderboardTable title={activeTitle} entries={scoreEntries} emptyLabel={emptyLabel} />
+          <LeaderboardTable
+            title={activeTitle}
+            entries={pagedScoreEntries}
+            emptyLabel={emptyLabel}
+            startRank={pageStartRank}
+          />
         ) : (
           <ReactionLeaderboardDetail
             title={activeTitle}
-            entries={reactionEntries}
+            entries={pagedReactionEntries}
             showImages={activeCategory.id === "stars"}
             emptyLabel={emptyLabel}
+            startRank={pageStartRank}
             onPreviewImage={setPreviewImage}
           />
         )}
+
+        <PaginationControls
+          currentPage={safeCurrentPage}
+          totalPages={totalPages}
+          totalCount={activeEntriesCount}
+          pageSize={LEADERBOARD_PAGE_SIZE}
+          onPageChange={setCurrentPage}
+        />
 
         {previewImage ? (
           <div

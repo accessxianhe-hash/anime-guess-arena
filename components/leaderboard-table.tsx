@@ -12,12 +12,14 @@ type LeaderboardTableProps = {
     durationMs: number;
   }>;
   emptyLabel: string;
+  startRank?: number;
 };
 
 export function LeaderboardTable({
   title,
   entries,
   emptyLabel,
+  startRank = 1,
 }: LeaderboardTableProps) {
   return (
     <section className="table-card">
@@ -51,7 +53,9 @@ export function LeaderboardTable({
               {entries.map((entry, index) => (
                 <tr key={entry.id}>
                   <td>
-                    <span className={`rank-badge rank-${Math.min(index + 1, 4)}`}>#{index + 1}</span>
+                    <span className={`rank-badge rank-${Math.min(startRank + index, 4)}`}>
+                      #{startRank + index}
+                    </span>
                   </td>
                   <td>{entry.nickname}</td>
                   <td>{entry.score}</td>

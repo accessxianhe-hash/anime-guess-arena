@@ -627,6 +627,42 @@ code {
   gap: 22px;
 }
 
+.score-after-submit {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid rgba(240, 124, 75, 0.18);
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(255, 247, 239, 0.92), rgba(255, 255, 255, 0.84));
+}
+
+.score-after-submit strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #25314d;
+  font-size: 1.02rem;
+}
+
+.result-next-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.auto-home-countdown {
+  display: inline-flex;
+  align-items: center;
+  min-height: 42px;
+  padding: 0 14px;
+  border: 1px solid rgba(70, 83, 114, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #6b7488;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
 .result-stat-grid .score-card {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 248, 240, 0.72));
 }
@@ -993,6 +1029,51 @@ code {
 
 .leaderboard-content .table-card {
   min-height: 520px;
+}
+
+.leaderboard-pagination,
+.leaderboard-page-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(70, 83, 114, 0.12);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.74);
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.leaderboard-pagination > div {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.leaderboard-pagination button {
+  min-width: 36px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(70, 83, 114, 0.14);
+  background: #fffdfb;
+  color: #4c5870;
+  font-weight: 800;
+}
+
+.leaderboard-pagination button:hover:not(:disabled),
+.leaderboard-pagination button.active {
+  border-color: rgba(240, 124, 75, 0.38);
+  background: linear-gradient(135deg, #fff3e9, #ffe0c7);
+  color: #d7683f;
+}
+
+.leaderboard-pagination button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .reaction-detail-card {
@@ -3568,9 +3649,9 @@ code {
 }
 
 .play-stage-panel .split-header-top {
-  position: sticky;
-  top: 12px;
-  z-index: 30;
+  position: static;
+  top: auto;
+  z-index: auto;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;

@@ -1,8 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { getReactionLeaderboards } from "@/lib/challenge-reactions";
+import { LEADERBOARD_LIMIT } from "@/lib/constants";
 import { createRouteLogger, errorMessage, getRequestId } from "@/lib/observability";
 import { reactionLeaderboardScopeSchema } from "@/lib/validators";
+
+function parseLimit(value: string | null) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return LEADERBOARD_LIMIT;
+  }
+  return Math.min(LEADERBOARD_LIMIT, Math.floor(parsed));
+}
 
 export async function GET(request: NextRequest) {
   const requestId = getRequestId(request);
@@ -15,10 +24,12 @@ export async function GET(request: NextRequest) {
     const scope = reactionLeaderboardScopeSchema.parse(
       request.nextUrl.searchParams.get("scope") ?? "daily",
     );
-    const boards = await getReactionLeaderboards(scope);
+    const limit = parseLimit(request.nextUrl.searchParams.get("limit"));
+    const boards = await getReactionLeaderboards(scope, limit);
 
     logger.info("reactionLeaderboard.fetch.success", {
       scope,
+      limit,
       heartCount: boards.hearts.length,
       starCount: boards.stars.length,
     });

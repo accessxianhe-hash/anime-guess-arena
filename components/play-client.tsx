@@ -99,10 +99,16 @@ type TurnTask = {
   previousOption: string;
 };
 
+type PendingReactionSave = {
+  likedSeriesIds: string[];
+  favoriteImageId: string | null;
+};
+
 const NEXT_QUESTION_DELAY_MS = 0;
 const IMAGE_LOAD_TIMEOUT_MS = 8_000;
 const PREFETCH_LOOKAHEAD_COUNT = 4;
 const TURN_REQUEST_TIMEOUT_MS = 10_000;
+const REACTION_BOARD_PREVIEW_LIMIT = 20;
 type ImageFetchPriority = "high" | "low" | "auto";
 
 const difficultyText = {
@@ -187,6 +193,8 @@ export function PlayClient() {
   const submissionQueueRef = useRef<Promise<void>>(Promise.resolve());
   const currentQuestionIdRef = useRef<string | null>(null);
   const questionQueueRef = useRef<QuestionCard[]>([]);
+  const reactionSaveInFlightRef = useRef(false);
+  const pendingReactionSaveRef = useRef<PendingReactionSave | null>(null);
   const advancePastUnusableQuestionRef = useRef<(question: QuestionCard) => void>(
     () => {},
   );
@@ -233,6 +241,8 @@ export function PlayClient() {
     setReactionBoards({ daily: null, weekly: null });
     setReactionError(null);
     setReactionSaving(false);
+    reactionSaveInFlightRef.current = false;
+    pendingReactionSaveRef.current = null;
     processedQuestionIdsRef.current.clear();
     blockedQuestionIdsRef.current.clear();
     finishTriggeredRef.current = false;
@@ -517,8 +527,12 @@ export function PlayClient() {
 
   const loadReactionBoards = useCallback(async () => {
     const [dailyResponse, weeklyResponse] = await Promise.all([
-      fetch("/api/reaction-leaderboard?scope=daily", { cache: "no-store" }),
-      fetch("/api/reaction-leaderboard?scope=weekly", { cache: "no-store" }),
+      fetch(`/api/reaction-leaderboard?scope=daily&limit=${REACTION_BOARD_PREVIEW_LIMIT}`, {
+        cache: "no-store",
+      }),
+      fetch(`/api/reaction-leaderboard?scope=weekly&limit=${REACTION_BOARD_PREVIEW_LIMIT}`, {
+        cache: "no-store",
+      }),
     ]);
     const [daily, weekly] = await Promise.all([
       dailyResponse.json(),
@@ -579,38 +593,63 @@ export function PlayClient() {
     likedSeriesIds: string[],
     favoriteImageId: string | null,
   ) {
-    if (!sessionId || reactionSaving) {
+    if (!sessionId) {
       return;
     }
 
+    pendingReactionSaveRef.current = {
+      likedSeriesIds,
+      favoriteImageId,
+    };
+
+    if (reactionSaveInFlightRef.current) {
+      return;
+    }
+
+    reactionSaveInFlightRef.current = true;
     setReactionSaving(true);
     setReactionError(null);
-    try {
-      const response = await fetch("/api/game/reactions/vote", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId,
-          likedSeriesIds,
-          favoriteImageId,
-        }),
-      });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.error ?? "Failed to save challenge reactions.");
-      }
 
-      const options = payload as ChallengeReactionOptions;
-      setReactionOptions(options);
-      setSelectedReactionSeriesIds(options.selectedSeriesIds);
-      setSelectedReactionImageId(options.selectedImageId);
-      await loadReactionBoards();
+    try {
+      while (pendingReactionSaveRef.current) {
+        const currentSave = pendingReactionSaveRef.current;
+        pendingReactionSaveRef.current = null;
+
+        const response = await fetch("/api/game/reactions/vote", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId,
+            likedSeriesIds: currentSave.likedSeriesIds,
+            favoriteImageId: currentSave.favoriteImageId,
+          }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error ?? "Failed to save challenge reactions.");
+        }
+
+        const options = payload as ChallengeReactionOptions;
+        setReactionOptions(options);
+
+        if (!pendingReactionSaveRef.current) {
+          setSelectedReactionSeriesIds(options.selectedSeriesIds);
+          setSelectedReactionImageId(options.selectedImageId);
+          void loadReactionBoards().catch(() => undefined);
+        }
+      }
     } catch (saveError) {
       setReactionError(
         saveError instanceof Error ? saveError.message : "Failed to save challenge reactions.",
       );
     } finally {
+      reactionSaveInFlightRef.current = false;
       setReactionSaving(false);
+
+      if (pendingReactionSaveRef.current) {
+        const nextSave = pendingReactionSaveRef.current;
+        void saveChallengeReactions(nextSave.likedSeriesIds, nextSave.favoriteImageId);
+      }
     }
   }
 
@@ -1076,7 +1115,6 @@ export function PlayClient() {
                 type="button"
                 className="button-secondary"
                 onClick={skipChallengeReactions}
-                disabled={reactionSaving}
               >
                 跳过本环节
               </button>
@@ -1096,11 +1134,10 @@ export function PlayClient() {
                 </div>
                 <div className="reaction-section-actions">
                   <button
-                    type="button"
-                    className="button-secondary"
-                    onClick={skipChallengeHearts}
-                    disabled={reactionSaving}
-                  >
+                  type="button"
+                  className="button-secondary"
+                  onClick={skipChallengeHearts}
+                >
                     跳过爱心
                   </button>
                 </div>
@@ -1113,7 +1150,6 @@ export function PlayClient() {
                         type="button"
                         className={active ? "reaction-chip active" : "reaction-chip"}
                         onClick={() => toggleChallengeHeart(item.id)}
-                        disabled={reactionSaving}
                       >
                         <span className="reaction-icon">♥</span>
                         <span>{item.title}</span>
@@ -1131,11 +1167,10 @@ export function PlayClient() {
                 </div>
                 <div className="reaction-section-actions">
                   <button
-                    type="button"
-                    className="button-secondary"
-                    onClick={skipChallengeStar}
-                    disabled={reactionSaving}
-                  >
+                  type="button"
+                  className="button-secondary"
+                  onClick={skipChallengeStar}
+                >
                     跳过星星
                   </button>
                 </div>
@@ -1148,7 +1183,6 @@ export function PlayClient() {
                         type="button"
                         className={active ? "reaction-image-card active" : "reaction-image-card"}
                         onClick={() => selectChallengeStar(item.id)}
-                        disabled={reactionSaving}
                       >
                         <span className="reaction-star">★</span>
                         <img src={item.imageUrl} alt={`${item.title} 截图`} loading="lazy" />

@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Bangumi Subject Image Export
 // @namespace    https://anime-guess-arena.local/
-// @version      0.1.4
+// @version      0.1.6
 // @description  Export user-posted images for a single Bangumi subject with source manifests.
 // @author       Codex
 // @match        https://bgm.tv/subject/*
@@ -20,7 +20,7 @@
   "use strict";
 
   const EXPORT_ROOT = "bangumi-export";
-  const SCRIPT_VERSION = "0.1.4";
+  const SCRIPT_VERSION = "0.1.6";
   const IMAGE_DIR = "images";
   const MIN_PAGE_DELAY_MS = 420;
   const MAX_PAGE_DELAY_MS = 980;
@@ -46,6 +46,7 @@
   const QUALITY_SAMPLE_MAX_EDGE = 256;
   const MIN_IMAGE_EDGE_SCORE = 8;
   const PANEL_ACCEPTED_PREVIEW_LIMIT = 60;
+  const PANEL_FILTERED_PREVIEW_PAGE_SIZE = 80;
   const MAX_PAGE_QUEUE = 180;
   const MAX_COMMENT_PAGE = 12;
   const MAX_REVIEW_PAGE = 8;
@@ -278,6 +279,7 @@
     panelPosition: readPanelPosition(),
     panelScrollTop: 0,
     panelScrollTopPinned: null,
+    filteredPreviewPage: 0,
     pageAttemptMap: new Map(),
     lastProgressAt: Date.now(),
   };
@@ -561,6 +563,7 @@
     state.statusText = "待命";
     state.statusKind = "idle";
     state.panelScrollTop = 0;
+    state.filteredPreviewPage = 0;
     state.lastProgressAt = Date.now();
   }
 
@@ -2224,10 +2227,11 @@
     return merged.find((item) => item?.id === previewId) || null;
   }
 
-  function removePreviewRecordById(previewId) {
+  function removePreviewRecordById(previewId, options = {}) {
     if (!previewId) {
       return;
     }
+    const shouldRevoke = options.revoke !== false;
 
     const removeFrom = (list) => {
       if (!Array.isArray(list) || !list.length) {
@@ -2236,7 +2240,9 @@
       const next = [];
       for (const item of list) {
         if (item?.id === previewId) {
-          revokePreviewRecord(item);
+          if (shouldRevoke) {
+            revokePreviewRecord(item);
+          }
         } else {
           next.push(item);
         }
@@ -2288,12 +2294,16 @@
 
     try {
       state.manualIncludeInFlightIds.add(previewId);
+      removePreviewRecordById(previewId, { revoke: false });
+      updateStatus("已从列表移除，正在后台收录。", "active");
       await processImageCandidate(candidate, subject, { bypassQuality: true, forceInclude: true });
       state.manualIncludedPreviewIds.add(previewId);
-      removePreviewRecordById(previewId);
-      renderPanel();
+      revokePreviewRecord(record);
       updateStatus("已手动收录该图片。", "done");
     } catch (error) {
+      if (!findPreviewRecordById(previewId)) {
+        pushPreviewRecord("recentFilteredPreviews", record);
+      }
       logError("manual_include_failed", {
         previewId,
         imageUrl: record.imageUrl,
@@ -2438,6 +2448,35 @@
     return rows.length ? `${header}\n${rows.join("\n")}` : "";
   }
 
+  function getFilteredPreviewPageData() {
+    const items = state.recentFilteredPreviews || [];
+    const pageSize = PANEL_FILTERED_PREVIEW_PAGE_SIZE;
+    const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+    const currentPage = Math.min(Math.max(0, state.filteredPreviewPage || 0), totalPages - 1);
+    state.filteredPreviewPage = currentPage;
+    const start = currentPage * pageSize;
+    return {
+      currentPage,
+      totalPages,
+      items: items.slice(start, start + pageSize),
+    };
+  }
+
+  function renderFilteredPreviewPager(pageData) {
+    if (!pageData || pageData.totalPages <= 1) {
+      return "";
+    }
+    const prevDisabled = pageData.currentPage <= 0 ? "disabled" : "";
+    const nextDisabled = pageData.currentPage >= pageData.totalPages - 1 ? "disabled" : "";
+    return `
+      <div style="margin-top:10px;display:flex;align-items:center;justify-content:flex-end;gap:8px;font-size:11px;color:#6a728a;">
+        <button type="button" data-action="filtered-preview-prev" ${prevDisabled} style="${buildPanelButtonStyle("#f3f5f9", "#49526c")};padding:6px 10px;font-size:11px;opacity:${prevDisabled ? ".45" : "1"};">上一页</button>
+        <span>第 ${pageData.currentPage + 1} / ${pageData.totalPages} 页</span>
+        <button type="button" data-action="filtered-preview-next" ${nextDisabled} style="${buildPanelButtonStyle("#f3f5f9", "#49526c")};padding:6px 10px;font-size:11px;opacity:${nextDisabled ? ".45" : "1"};">下一页</button>
+      </div>
+    `;
+  }
+
   async function copyTextToClipboard(text) {
     if (!text) {
       return false;
@@ -2522,6 +2561,7 @@
     const startButtonLabel = state.running ? (state.paused ? "继续抓取" : "抓取中") : "开始抓取";
     const pauseButtonLabel = state.running ? (state.paused ? "继续抓取" : "暂停抓取") : "暂停抓取";
     const bodyDisplay = state.panelCollapsed ? "none" : "block";
+    const filteredPageData = getFilteredPreviewPageData();
 
     root.innerHTML = `
       <div data-drag-handle="panel" style="padding:14px 16px 12px;border-bottom:1px solid rgba(84,97,142,.1);display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:move;user-select:none;">
@@ -2562,11 +2602,12 @@
         )}
         ${renderPreviewSection(
           `最近被过滤（全部 ${state.recentFilteredPreviews.length}）`,
-          "质量未通过的图片（本次任务全部记录）",
-          state.recentFilteredPreviews,
+          "质量未通过的图片（全部保留，分页显示避免面板变慢）",
+          filteredPageData.items,
           "暂无记录",
           { columnCount: 3, cardMinWidth: 250 }
         )}
+        ${renderFilteredPreviewPager(filteredPageData)}
         <div style="margin-top:12px;border-radius:14px;background:#f7f9fc;padding:10px 12px;font-size:11px;line-height:1.7;color:#6a728a;">
           建议使用专用账号、单作品、低并发运行。若遇到验证码、403/429 或登录失效，请先暂停后再继续。
         </div>
@@ -2601,6 +2642,17 @@
       });
     });
     root.querySelector('[data-action="refresh"]').addEventListener("click", renderPanel);
+    root.querySelector('[data-action="filtered-preview-prev"]')?.addEventListener("click", () => {
+      pinPanelScrollFromDom();
+      state.filteredPreviewPage = Math.max(0, (state.filteredPreviewPage || 0) - 1);
+      renderPanel();
+    });
+    root.querySelector('[data-action="filtered-preview-next"]')?.addEventListener("click", () => {
+      const totalPages = Math.max(1, Math.ceil((state.recentFilteredPreviews || []).length / PANEL_FILTERED_PREVIEW_PAGE_SIZE));
+      pinPanelScrollFromDom();
+      state.filteredPreviewPage = Math.min(totalPages - 1, (state.filteredPreviewPage || 0) + 1);
+      renderPanel();
+    });
     root.querySelectorAll('[data-action="preview-open-image"]').forEach((button) => {
       button.addEventListener("click", () => {
         const previewUrl = button.getAttribute("data-preview-url");
@@ -2668,7 +2720,7 @@
       });
     });
     root.querySelectorAll('[data-action="preview-include"]').forEach((button) => {
-      button.addEventListener("click", async () => {
+      button.addEventListener("click", () => {
         const previewId = button.getAttribute("data-preview-id") || "";
         if (!previewId) {
           updateStatus("无法识别预览记录。", "warning");
@@ -2676,11 +2728,7 @@
         }
         pinPanelScrollFromDom();
         button.disabled = true;
-        try {
-          await includePreviewRecordById(previewId);
-        } finally {
-          button.disabled = false;
-        }
+        includePreviewRecordById(previewId);
       });
     });
     root.querySelector('[data-action="preview-copy-csv-batch"]')?.addEventListener("click", async () => {

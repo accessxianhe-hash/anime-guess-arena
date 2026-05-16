@@ -4,7 +4,9 @@ export const GAME_DURATION_SECONDS = 90;
 export const YEARLY_GAME_DURATION_SECONDS = 90;
 export const YEARLY_CORRECT_SCORE = 10;
 export const YEARLY_SWITCH_YEAR_PROBABILITY = 0.7;
-export const LEADERBOARD_LIMIT = 20;
+export const LEADERBOARD_LIMIT = 100;
+export const LEADERBOARD_PAGE_SIZE = 20;
+export const LEADERBOARD_COMPACT_LIMIT = 20;
 export const HOME_PREVIEW_LIMIT = 5;
 export const APP_TIMEZONE = process.env.APP_TIMEZONE ?? "Asia/Shanghai";
 

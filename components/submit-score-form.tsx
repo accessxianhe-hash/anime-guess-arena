@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -12,6 +12,8 @@ type SubmitScoreFormProps = {
   accuracy: number;
   onReplay: () => void;
 };
+
+const RESULT_RETURN_SECONDS = 25;
 
 function gradeFromAccuracy(accuracy: number, answeredCount: number) {
   if (answeredCount === 0) {
@@ -41,8 +43,32 @@ export function SubmitScoreForm({
   const [nickname, setNickname] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isSubmitted, setIsSubmitted] = useState(false);
+  const [returnSeconds, setReturnSeconds] = useState(RESULT_RETURN_SECONDS);
   const [isPending, startTransition] = useTransition();
   const grade = gradeFromAccuracy(accuracy, answeredCount);
+
+  useEffect(() => {
+    if (!isSubmitted) {
+      return;
+    }
+
+    setReturnSeconds(RESULT_RETURN_SECONDS);
+    const timer = window.setInterval(() => {
+      setReturnSeconds((seconds) => {
+        if (seconds <= 1) {
+          window.clearInterval(timer);
+          router.push("/");
+          return 0;
+        }
+        return seconds - 1;
+      });
+    }, 1000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [isSubmitted, router]);
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -67,9 +93,9 @@ export function SubmitScoreForm({
         return;
       }
 
-      setMessage("成绩已提交，正在跳转到排行榜。");
-      router.push("/leaderboard");
-      router.refresh();
+      setIsSubmitted(true);
+      setMessage("成绩已提交。可以给本局喜欢的番剧点心心，给最喜欢的截图点星星。");
+      setError(null);
     });
   }
 
@@ -113,24 +139,47 @@ export function SubmitScoreForm({
             placeholder="想到什么就取什么"
             value={nickname}
             onChange={(event) => setNickname(event.target.value)}
+            disabled={isPending || isSubmitted}
           />
           <p className="field-hint">1 到 30 个字符即可，中文、标点、空格和表情都可以。</p>
         </div>
-        <div className="toolbar">
-          <button type="submit" className="button" disabled={isPending}>
-            {isPending ? "提交中..." : "提交成绩"}
-          </button>
-          <button type="button" className="button-secondary" onClick={onReplay}>
-            再来一局
-          </button>
-          <Link href="/leaderboard" className="button-ghost">
-            查看排行
-          </Link>
-        </div>
+        {!isSubmitted ? (
+          <div className="toolbar">
+            <button type="submit" className="button" disabled={isPending}>
+              {isPending ? "提交中..." : "提交成绩"}
+            </button>
+            <button type="button" className="button-secondary" onClick={onReplay}>
+              再来一局
+            </button>
+            <Link href="/leaderboard" className="button-ghost">
+              查看排行
+            </Link>
+          </div>
+        ) : null}
       </form>
 
       {message ? <div className="message success">{message}</div> : null}
       {error ? <div className="message error">{error}</div> : null}
+
+      {isSubmitted ? (
+        <div className="score-after-submit">
+          <div>
+            <strong>喜欢这局的题目？</strong>
+            <p className="muted">
+              下方心心可以标记喜欢的番剧，星星可以标记印象最深的截图。倒计时不会影响你的选择。
+            </p>
+          </div>
+          <div className="result-next-actions">
+            <span className="auto-home-countdown">{returnSeconds} 秒后返回首页</span>
+            <Link href="/" className="button-secondary">
+              返回首页
+            </Link>
+            <button type="button" className="button" onClick={onReplay}>
+              再玩一次
+            </button>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
